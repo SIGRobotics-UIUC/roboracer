@@ -1,0 +1,13 @@
+# AutoDRIVE RoboRacer (2026-iros practice build), measured 2026-10-04 (see adapter.py docstring).
+adapter:
+  ros__parameters:
+    vehicle_ns: /autodrive/roboracer_1
+    max_steering_angle: 0.524   # rad at steering_command = 1
+    laser_x: 0.2733             # rear axle -> lidar
+    speed_kff: 0.04             # throttle per m/s; sim settles at ~25 m/s per unit throttle
+    speed_kp: 0.006
+    speed_ki: 0.006
+    speed_i_max: 1.0
+    max_throttle: 1.0
+    cmd_timeout: 0.5
+    auto_unstick: false         # crashes are handled by run_logger's API reset instead
