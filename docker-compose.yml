@@ -1,0 +1,14 @@
+# The AutoDRIVE simulator runs natively on the host and connects to the bridge on :4567.
+services:
+  ros:
+    build: .
+    image: sigrobotics_f1tenth:humble
+    stdin_open: true
+    tty: true
+    ports:
+      - "4567:4567"   # AutoDRIVE bridge
+      - "8765:8765"   # Foxglove
+    volumes:
+      - ./ws:/root/ws
+    working_dir: /root/ws
+    command: bash
