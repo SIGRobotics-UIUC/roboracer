@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""AutoDRIVE <-> stack adapter (sim only; stands in for the drivers AND localization).
+"""AutoDRIVE <-> stack adapter.
 
-AutoDRIVE gives ground-truth pose, so in sim this node publishes /car_state/odom itself
-(map frame, from the sim's IPS) and the localization node isn't started. It also publishes
-/scan and TF map -> base_link -> laser, and turns /drive (speed + steering angle) into
-AutoDRIVE's normalized throttle/steering commands.
-(Originally written for ForzaETH, so it also publishes /car_state/scan, /car_state/pose and
-/vesc/sensors/imu/raw, which this stack doesn't use.)
+Republishes simulator sensor topics into the names expected by the stack, publishes
+static sensor transforms, exposes simulator ground truth separately for debugging,
+and converts /drive commands into AutoDRIVE normalized throttle/steering commands.
 
-AutoDRIVE RoboRacer (2026-iros) throttle behaves like a speed setpoint: steady-state
-speed is ~25 m/s per unit throttle (measured 2026-10-04: 0.05 -> 1.25, 0.2 -> 4.92 m/s), so
-the command is feedforward v_ref * speed_kff with a small PI trim on the measured speed.
-Steering is linear, +-1 -> +-0.524 rad (sim feedback and measured yaw rate agree).
-Speed comes from the sim's own body-frame velocity (odom twist), position from the IPS.
-
-Recovery after a crash is the run logger's job (it resets the car over the API).
-auto_unstick (off by default) is the old fallback for sims without a reset: if /drive asks
-for > unstick_cmd m/s but the car stays below unstick_speed for unstick_time s, reverse
-for unstick_duration s, then hand control back.
+Vehicle speed for the throttle controller comes from the estimated odometry rather
+than AutoDRIVE ground-truth odometry.
 """
 import math
 
@@ -45,8 +34,14 @@ class Adapter(Node):
         super().__init__('adapter')
         p = self.declare_parameter
         self.ns = p('vehicle_ns', '/autodrive/roboracer_1').value
+        self.odom_topic = p('odom_topic', '/odometry/filtered').value
         self.max_steer = p('max_steering_angle', 0.5236).value   # rad at steering_command = 1
-        self.laser_x = p('laser_x', 0.2733).value                 # base_link (rear axle) -> lidar
+        self.imu_x = p('imu_x', 0.08).value
+        self.imu_z = p('imu_z', 0.055).value
+        self.laser_x = p('laser_x', 0.2733).value
+        self.laser_z = p('laser_z', 0.096).value
+        self.camera_x = p('camera_x', -0.015).value
+        self.camera_z = p('camera_z', 0.15).value
         self.kff = p('speed_kff', 0.04).value                     # throttle per m/s (1 / 25)
         self.kp = p('speed_kp', 0.006).value
         self.ki = p('speed_ki', 0.006).value
@@ -68,6 +63,7 @@ class Adapter(Node):
         self.create_subscription(Odometry, self.ns + '/odom', self.sim_odom_cb, qos)
         self.create_subscription(Imu, self.ns + '/imu', self.imu_cb, qos)
         self.create_subscription(LaserScan, self.ns + '/lidar', self.lidar_cb, qos)
+        self.create_subscription(Odometry, self.odom_topic, self.odom_cb, 10)
         self.create_subscription(AckermannDriveStamped, '/drive', self.drive_cb, 10)
 
         self.scan_pub = self.create_publisher(LaserScan, '/car_state/scan', 10)
@@ -75,23 +71,19 @@ class Adapter(Node):
         # mounted rotated 90 deg (it uses -linear_acceleration.y), and /scan for FTG mode.
         self.vesc_imu_pub = self.create_publisher(Imu, '/vesc/sensors/imu/raw', 10)
         self.raw_scan_pub = self.create_publisher(LaserScan, '/scan', 10)
-        self.odom_pub = self.create_publisher(Odometry, '/car_state/odom', 10)
-        self.pose_pub = self.create_publisher(PoseStamped, '/car_state/pose', 10)
+        self.gt_odom_pub = self.create_publisher(Odometry, '/ground_truth/odom', 10)
+        self.gt_pose_pub = self.create_publisher(PoseStamped, '/ground_truth/pose', 10)
         self.throttle_pub = self.create_publisher(Float32, self.ns + '/throttle_command', qos)
         self.steer_pub = self.create_publisher(Float32, self.ns + '/steering_command', qos)
 
         self.tf = TransformBroadcaster(self)
-        static = TransformStamped()
-        static.header.stamp = self.get_clock().now().to_msg()
-        static.header.frame_id = 'base_link'
-        static.child_frame_id = 'laser'
-        static.transform.translation.x = self.laser_x
-        static.transform.rotation.w = 1.0
         self.static_tf = StaticTransformBroadcaster(self)
-        self.static_tf.sendTransform(static)
+        self.publish_static_transforms()
 
         self.yaw = None
         self.yaw_rate = 0.0
+        self.gt_vx = 0.0
+        self.gt_vy = 0.0
         self.vx = 0.0
         self.vy = 0.0
         self.v_ref = 0.0
@@ -106,7 +98,29 @@ class Adapter(Node):
         self.get_logger().info(f'AutoDRIVE adapter up on {self.ns}')
 
     # ---------------- sensors -> ForzaETH ----------------
-    def imu_cb(self, msg):
+    def make_static_tf(self, child, position, orientation=(0.0, 0.0, 0.0, 1.0)):
+        tf = TransformStamped()
+        tf.header.stamp = self.get_clock().now().to_msg()
+        tf.header.frame_id = 'base_link'
+        tf.child_frame_id = child
+        tf.transform.translation.x = position[0]
+        tf.transform.translation.y = position[1]
+        tf.transform.translation.z = position[2]
+        tf.transform.rotation.x = orientation[0]
+        tf.transform.rotation.y = orientation[1]
+        tf.transform.rotation.z = orientation[2]
+        tf.transform.rotation.w = orientation[3]
+        return tf
+
+    def publish_static_transforms(self):
+        transforms = [
+            self.make_static_tf('imu', [self.imu_x, 0.0, self.imu_z]),
+            self.make_static_tf('laser', [self.laser_x, 0.0, self.laser_z]),
+            self.make_static_tf('front_camera', [self.camera_x, 0.0, self.camera_z],[0.0, 0.0871557, 0.0, 0.9961947]),
+        ]
+        self.static_tf.sendTransform(transforms)
+
+    def imu_cb(self, msg:Imu):
         self.yaw = yaw_from_quat(msg.orientation)
         self.yaw_rate = msg.angular_velocity.z
         vesc = Imu()
@@ -117,48 +131,52 @@ class Adapter(Node):
         vesc.linear_acceleration.z = msg.linear_acceleration.z
         vesc.angular_velocity = msg.angular_velocity
         self.vesc_imu_pub.publish(vesc)
+        # self.vesc_imu_pub.publish(msg)
 
-    def sim_odom_cb(self, msg):
-        self.vx = msg.twist.twist.linear.x     # body frame, from the sim
-        self.vy = msg.twist.twist.linear.y
+    def sim_odom_cb(self, msg:Odometry):
+        self.gt_vx = msg.twist.twist.linear.x
+        self.gt_vy = msg.twist.twist.linear.y
 
-    def ips_cb(self, msg):
+    def odom_cb(self, msg:Odometry):
+        self.vx = msg.twist.twist.linear.x
+
+    #publishes the ground truth odometry and transform
+    def ips_cb(self, msg:Point):
         if self.yaw is None:
             return
-        now = self.get_clock().now()
 
-        stamp = now.to_msg()
+        stamp = self.get_clock().now().to_msg()
         qx, qy, qz, qw = quat_from_yaw(self.yaw)
 
         odom = Odometry()
         odom.header.stamp = stamp
         odom.header.frame_id = 'map'
-        odom.child_frame_id = 'base_link'
+        odom.child_frame_id = 'ground_truth'
         odom.pose.pose.position.x = msg.x
         odom.pose.pose.position.y = msg.y
         odom.pose.pose.orientation.x = qx
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = self.vx
-        odom.twist.twist.linear.y = self.vy
+        odom.twist.twist.linear.x = self.gt_vx
+        odom.twist.twist.linear.y = self.gt_vy
         odom.twist.twist.angular.z = self.yaw_rate
-        self.odom_pub.publish(odom)
+        self.gt_odom_pub.publish(odom)
 
         pose = PoseStamped()
         pose.header = odom.header
         pose.pose = odom.pose.pose
-        self.pose_pub.publish(pose)
+        self.gt_pose_pub.publish(pose)
 
         tf = TransformStamped()
         tf.header = odom.header
-        tf.child_frame_id = 'base_link'
+        tf.child_frame_id = 'ground_truth'
         tf.transform.translation.x = msg.x
         tf.transform.translation.y = msg.y
         tf.transform.rotation = odom.pose.pose.orientation
         self.tf.sendTransform(tf)
 
-    def lidar_cb(self, msg):
+    def lidar_cb(self, msg:LaserScan):
         msg.header.frame_id = 'laser'
         msg.header.stamp = self.get_clock().now().to_msg()
         self.scan_pub.publish(msg)
@@ -220,5 +238,6 @@ def main():
         pass
     finally:
         node.throttle_pub.publish(Float32(data=0.0))
+        node.steer_pub.publish(Float32(data=0.0))
         node.destroy_node()
         rclpy.try_shutdown()

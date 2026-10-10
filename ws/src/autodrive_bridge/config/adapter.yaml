@@ -2,6 +2,7 @@
 adapter:
   ros__parameters:
     vehicle_ns: /autodrive/roboracer_1
+    odom_topic: /odometry/filtered
     max_steering_angle: 0.524   # rad at steering_command = 1
     laser_x: 0.2733             # rear axle -> lidar
     speed_kff: 0.04             # throttle per m/s; sim settles at ~25 m/s per unit throttle
