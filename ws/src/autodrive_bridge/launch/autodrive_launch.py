@@ -23,8 +23,8 @@ def generate_launch_description():
     foxglove = Node(package='foxglove_bridge', executable='foxglove_bridge', name='foxglove_bridge')
 
     return LaunchDescription([
-        DeclareLaunchArgument('enable_camera',default_value='true'),
-        DeclareLaunchArgument('publish_tf',default_value='true'),
+        DeclareLaunchArgument('publish_restricted_topics',default_value='true'),
+        DeclareLaunchArgument('publish_camera',default_value='true'),
         bridge,
         adapter,
         foxglove,        
