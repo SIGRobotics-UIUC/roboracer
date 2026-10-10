@@ -53,3 +53,12 @@ CATKIN_IGNORE
 # colcon (ws/)
 install/
 log/
+.devcontainer/devcontainer.json
+.github/dependabot.yml
+.vscode/browse.vc.db
+.vscode/browse.vc.db-shm
+.vscode/browse.vc.db-wal
+.vscode/browse.vc.db.lock
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+Dockerfile
