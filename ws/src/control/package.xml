@@ -7,9 +7,12 @@
   <maintainer email="zzang@seas.upenn.edu">zzangupenn</maintainer>
   <maintainer email="billyzheng.bz@gmail.com">Hongrui Zheng</maintainer>
   <license>MIT</license>
+  <license>GPL-3.0-or-later</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>ackermann_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

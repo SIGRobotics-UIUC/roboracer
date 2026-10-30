@@ -1,7 +1,8 @@
-"""Race a mapped track: localization + pure pursuit on its raceline.
+"""Race a mapped track with localization and pure pursuit or MAP.
 
     ros2 launch control race.launch.py track:=<name> [speed_scale:=0.5] [max_speed:=0.0] [pose_topic:=/localized_pose]
-        [avoid:=false] [localizer:=cartographer|mcl] [adaptive_lookahead:=true] [adaptive_lookahead_cut:=0.1]
+        [controller:=pure_pursuit|map] [avoid:=false] [localizer:=cartographer|mcl]
+        [adaptive_lookahead:=true] [adaptive_lookahead_cut:=0.1]
         [adaptive_lookahead_min_time:=0.25]
 
 Needs tracks/<name>/map.pbstream (map.yaml for localizer:=mcl) and raceline.csv (ws/scripts/map_track.sh
@@ -37,6 +38,19 @@ def obstacle_spliner(context):
     }])]
 
 
+def controller_launch(context, include):
+    controller = LaunchConfiguration('controller').perform(context)
+    if controller == 'pure_pursuit':
+        return [include('control', 'pure_pursuit.launch.py', [
+            'track', 'pose_topic', 'speed_scale', 'max_speed', 'avoid',
+            'adaptive_lookahead', 'adaptive_lookahead_cut', 'adaptive_lookahead_min_time'])]
+    if controller == 'map':
+        if LaunchConfiguration('avoid').perform(context).lower() in ('true', '1'):
+            raise ValueError('MAP does not support avoid:=true')
+        return [include('control', 'map.launch.py', ['track', 'pose_topic', 'speed_scale', 'max_speed'])]
+    raise ValueError('controller must be pure_pursuit or map')
+
+
 def generate_launch_description():
     def include(package, launch_file, args, condition=None):
         return IncludeLaunchDescription(
@@ -51,6 +65,7 @@ def generate_launch_description():
                               description="a localizer's PoseStamped in the map frame"),
         DeclareLaunchArgument('speed_scale', default_value='0.5', description='drive speed = raceline vx * speed_scale'),
         DeclareLaunchArgument('max_speed', default_value='0.0', description='cap on the drive speed [m/s], 0 = no cap'),
+        DeclareLaunchArgument('controller', default_value='pure_pursuit'),
         DeclareLaunchArgument('avoid', default_value='false',
                               description='avoid obstacles the map did not have (obstacle_spliner_node)'),
         DeclareLaunchArgument('localizer', default_value='cartographer',
@@ -63,8 +78,6 @@ def generate_launch_description():
                               description='with adaptive_lookahead: but lookahead >= min_time x speed [s]'),
         include('perception', 'localization.launch.py', ['track'], UnlessCondition(use_mcl)),
         include('perception', 'mcl.launch.py', ['track'], IfCondition(use_mcl)),
-        include('control', 'pure_pursuit.launch.py', [
-            'track', 'pose_topic', 'speed_scale', 'max_speed', 'avoid',
-            'adaptive_lookahead', 'adaptive_lookahead_cut', 'adaptive_lookahead_min_time']),
+        OpaqueFunction(function=lambda context: controller_launch(context, include)),
         OpaqueFunction(function=obstacle_spliner),
     ])
