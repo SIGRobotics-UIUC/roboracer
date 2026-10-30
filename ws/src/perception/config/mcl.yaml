@@ -1,0 +1,74 @@
+# Parameters of mcl_node (mcl.launch.py). Every key is optional; these are the defaults.
+mcl:
+  ros__parameters:
+    # particles: set by the launch argument particles:= (default 1000; ~2000 is fine for numpy at 40 Hz scans)
+    beams: 60                  # lidar beams used per update, evenly spaced
+    sigma_hit: 0.15            # m, std of a wall hit in the likelihood field (map resolution + lidar noise)
+    z_hit: 0.8                 # weight of "the endpoint is on a wall"
+    z_rand: 0.2                # floor per beam: unknown space, obstacles, outliers do not zero a particle
+    likelihood_scale: 0.4      # < 1 tempers the (correlated) beams; lower = a more diverse cloud
+    max_dist: 2.0              # m, distance-field cap
+    noise_x: [0.10, 0.02]      # motion std per m travelled, per rad turned: along the car
+    noise_y: [0.05, 0.05]      #                                              sideways
+    noise_yaw: [0.05, 0.10]    #                                              heading [rad]
+    update_min_d: 0.05         # m of odometry between filter updates once localized
+    update_min_a: 0.05         # rad
+    init_std_xy: 0.15          # m, cloud around the start pose (map origin after a reset, or /initialpose)
+    init_std_yaw: 0.10         # rad
+    converged_std_xy: 0.10     # m  \  localized (the car may drive) after converged_updates updates
+    converged_std_yaw: 0.08    # rad / below both
+    converged_updates: 3
+    lost_std_xy: 0.60          # m, the only way the pose is withdrawn (the car stops): the cloud spreads
+    debounce: 0.5              # s after a sim reset event before searching for the car
+    still_speed: 0.1           # m/s, "the car has stopped" after a reset
+    publish_particles: true    # /mcl/particles for Foxglove
+    # finding the car (global scan matching in a worker thread: start, sim reset, lost)
+    min_fit: 0.5               # a search result fitting the scan worse than this (0..1) is not a pose
+    ambiguity: 0.97            # a 2nd place fitting >= this x the best: tie, settled from the last known pose
+    prior_radius: 3.0          # m, "near the last known pose" (or the map origin) for that
+    yaw_scale: 1.0             # m per rad of heading difference when comparing places to the last pose
+    search_period: 0.5         # s between search attempts while the car is not found ...
+    search_period_max: 2.0     # s ... backing off to this
+    force_after: 4             # failed attempts before a best guess (with relaxed_min_fit) instead of waiting
+    relaxed_min_fit: 0.3
+    validate_evidence: 1.5     # after a guess, the other places that fit are scored as the car drives: one the
+                               #   pick out-fits by this much in total (fit x updates) is ruled out, one that
+                               #   out-fits the pick by as much is switched to ...
+    validate_distance: 200.0   # m ... ones that keep fitting the same (featureless) are kept this far (~a lap)
+    # hybrid: search near tracks/<name>/raceline.csv first (both directions), verify with the whole area after
+    hybrid: true               # false: always the whole-area search (also without a raceline.csv)
+    hybrid_min_fit: 0.8        # a raceline-only result fitting worse falls back to the whole-area search
+    hybrid_radius: 0.6         # m from the raceline
+    hybrid_yaw: 0.44           # rad (25 deg) around the raceline's direction, forward and backward
+    hybrid_seeds: 15           # best coarse poses refined
+    # thrown off while driving (wheel slip, a stalled sensor stream)
+    fit_drop: 0.75             # fit below this x its running level for fit_bad_updates updates: local search
+    fit_bad_updates: 3
+    local_radius: 0.8          # m  \ local search window around the estimate
+    local_yaw: 0.07            # rad /  (4 deg: slip moves the car, barely turns it)
+    snap_gain: 0.1             # the local result must fit this much better to re-anchor (else: an obstacle)
+    snap_agree_yaw: 0.035      # rad: ... and the next search must find the same offset (recheck_agree m, this)
+    reanchor_min_fit: 0.8      # a re-anchor (local search or recheck) must also fit at least this well, or
+    reanchor_ratio: 0.85       #   this x the fit level on good stretches if lower: where the map itself is wrong
+                               #   no pose fits well, and the filter coasts on odometry instead
+    relocate_min_fit: 0.9      # a background global search moves the car only to a place fitting this well
+    relocate_ratio: 0.93       #   (or this x the good-fit level if lower) ...
+    relocate_agree: 0.5        # m ... found again (within this) by the next search
+    relocate_margin: 0.05      # ... and fitting this much better than the scan fits at the filter's pose (also the
+                               #   verify behind a start: it moves a driving car only past both gates)
+    interpolate_odom: true     # the odometry at each scan's stamp (interpolated), not the newest: lidar latency
+    # The absolute values are from the sim (iros2026_v2: true pose 0.93-1.0 on good stretches, <= 0.74 on its
+    # badly mapped one, a look-alike there 0.84). A real lidar may fit less everywhere: the ratios then lower the
+    # gates with the good-fit level. To check on a real bag: the re-anchor log lines print 'fit a -> b'; good
+    # stretches should show b >= ~0.9. If re-anchors you expect never happen, lower the *_min_fit values.
+    max_jump: 1.0              # m: a bigger step between two odometry messages that the speed (x1.5, +0.3 m) does
+                               #   not explain is a frame jump (odometry restart): the pose is kept, then checked
+    slip_reanchors: 3          # re-anchors within 2 s: a burst (the map fits badly here, or the wheels slip) ...
+    slip_hold: 2.0             # s ... local re-anchors pause, a background global search checks the pose
+    recheck_updates: 5         # every this many updates, a small local search (catches along-straight error)
+    recheck_radius: 0.5        # m
+    recheck_gain: 0.03         # fit gain that counts as better; re-anchors only when two rechecks agree
+    recheck_min_shift: 0.08    # m, smaller offsets are left to the filter
+    recheck_agree: 0.1         # m between the two rechecks' offsets
+    doubt_fit: 0.4             # fit below this x its level for doubt_updates updates in a row: a global search
+    doubt_updates: 10          # in the background, moving the car only if it is clearly elsewhere

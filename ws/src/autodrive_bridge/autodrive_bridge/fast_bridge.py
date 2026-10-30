@@ -19,6 +19,7 @@ Subscribed:
   throttle_command, steering_command, /autodrive/reset_command
 """
 import base64
+import errno
 import gzip
 import math
 import signal
@@ -42,6 +43,8 @@ from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Imu, JointState, LaserScan, Image
 from std_msgs.msg import Bool, Float32, Int32, String
 
+from autodrive_bridge.single_instance import exit_with_parent
+
 
 GRAVITY = 9.80665   # m/s^2
 
@@ -56,6 +59,11 @@ def is_jump(prev, cur, slack=1.0, margin=1.5):
     dt = max(0.0, cur[0] - prev[0])
     # the slower speed: a respawn zeroes it, so a short respawn at speed still counts
     return math.hypot(cur[1] - prev[1], cur[2] - prev[2]) > slack + margin * min(prev[3], cur[3]) * dt
+
+
+def finite_or_zero(x):
+    """A command for the sim: NaN or inf would go out as 'nan' / 'inf'."""
+    return x if math.isfinite(x) else 0.0
 
 
 def gravity_in_body(q):
@@ -134,12 +142,12 @@ class FastBridge:
 
     def _throttle_cb(self, msg):
         with self.lock:
-            self.throttle_cmd = float(msg.data)
+            self.throttle_cmd = finite_or_zero(float(msg.data))
             self.last_cmd_t = time.monotonic()
 
     def _steering_cb(self, msg):
         with self.lock:
-            self.steering_cmd = float(msg.data)
+            self.steering_cmd = finite_or_zero(float(msg.data))
             self.last_cmd_t = time.monotonic()
 
     def _reset_cb(self, msg):
@@ -326,6 +334,7 @@ class FastBridge:
 def main():
     # No rclpy signal handler: it only shut the context down, gevent's loop never saw the signal,
     # and the process outlived ros2 launch (SIGINT, then SIGTERM) with :4567 still bound.
+    exit_with_parent()
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     bridge = FastBridge()
     executor = SingleThreadedExecutor()
@@ -373,6 +382,12 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    except OSError as e:   # the launch ends with this node (autodrive_launch.py)
+        if e.errno != errno.EADDRINUSE:
+            raise
+        bridge.node.get_logger().fatal(f'port {bridge.port} in use: is the old bridge still running? '
+                                       'Stop it first (Ctrl-C in its terminal)')
+        raise SystemExit(1)
     finally:
         # context first: it wakes executor.spin, which would otherwise still be in its wait at exit
         # (std::terminate, exit code -6)

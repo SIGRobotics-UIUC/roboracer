@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # Map an unseen track and plan its minimum-time raceline (docs/pipeline.md):
-#   Cartographer mapping -> save_map -> centerline -> TUM mintime
+#   Cartographer mapping -> save_map -> centerline -> TUM mintime (if that fails: a fallback line, loudly)
+# Exit status as build_raceline's: 0 clean mintime raceline, 2 a fallback raceline (WARNING printed), 1 none.
 #
-#   ws/scripts/map_track.sh <name> [--wall-follow] [--laps N] [wall_follow.launch.py args, e.g. speed:=1.2]
+#   ws/scripts/map_track.sh <name> [--wall-follow | --gap-follow] [--laps N] [follower launch args, e.g. speed:=1.2]
 #
 # Needs the bridge running (ros2 launch autodrive_bridge autodrive_launch.py) and the sim connected.
 # Drive the lap(s) from another terminal with: ros2 run autodrive_bridge teleop_keyboard
-# or pass --wall-follow: the wall follower drives N laps (default 2), then the map is saved automatically.
+# or pass --wall-follow (wall_follow.launch.py) or --gap-follow (disparity_gap.launch.py): the follower
+# drives N laps (default 2), then the map is saved automatically.
 # Writes tracks/<name>/: map.pbstream, map.pgm, map.yaml, trajectory.csv, centerline.csv,
 # raceline.csv, preview.png. Re-plan an existing map with: ros2 run planning build_raceline <name>
 set -eo pipefail
 
-usage="usage: map_track.sh <track name> [--wall-follow] [--laps N] [wall_follow.launch.py args, e.g. speed:=1.2]"
+usage="usage: map_track.sh <track name> [--wall-follow | --gap-follow] [--laps N] [follower launch args, e.g. speed:=1.2]"
 name=${1:?$usage}
 shift
-wall_follow=false
+follow_launch=   # the launch file that drives the laps, empty = drive them by hand
 laps=2
 follow_args=()
 while [ $# -gt 0 ]; do
     case $1 in
-        --wall-follow) wall_follow=true ;;
+        --wall-follow|--gap-follow)
+            [ -z "$follow_launch" ] || { echo "$usage" >&2; exit 1; }
+            follow_launch=$([ "$1" = --wall-follow ] && echo wall_follow.launch.py || echo disparity_gap.launch.py) ;;
         --laps) laps=${2:?$usage}; shift ;;
         *:=*) follow_args+=("$1") ;;
         *) echo "$usage" >&2; exit 1 ;;
@@ -47,7 +51,7 @@ stop_group() {
 }
 
 log="$HOME/ws/log/map_track_$name.log"
-follow_log="$HOME/ws/log/map_track_${name}_wall_follow.log"
+follow_log="$HOME/ws/log/map_track_${name}_${follow_launch%%.*}.log"
 mkdir -p "$(dirname "$log")"
 reset_sim_car
 # job control: the launch gets its own process group and keeps SIGINT (a script's background
@@ -66,14 +70,14 @@ sleep 3   # a node that crashes on its config dies within a second or two
 cartographer_up || { echo "Cartographer failed to start, see $log" >&2; exit 1; }
 echo "Mapping '$name' (log: $log)."
 
-if $wall_follow; then
+if [ -n "$follow_launch" ]; then
     set -m
-    ros2 launch control wall_follow.launch.py laps:="$laps" "${follow_args[@]}" >"$follow_log" 2>&1 &
+    ros2 launch control "$follow_launch" laps:="$laps" "${follow_args[@]}" >"$follow_log" 2>&1 &
     follower=$!
     set +m
     sleep 2
-    kill -0 "$follower" 2>/dev/null || { echo "wall follower failed to start, see $follow_log" >&2; exit 1; }
-    echo "Wall following $laps lap(s) (log: $follow_log). Press Enter to stop early and save the map."
+    kill -0 "$follower" 2>/dev/null || { echo "$follow_launch failed to start, see $follow_log" >&2; exit 1; }
+    echo "$follow_launch driving $laps lap(s) (log: $follow_log). Press Enter to stop early and save the map."
     shown=0
     while kill -0 "$follower" 2>/dev/null; do
         if read -r -t 1 _ </dev/tty; then
@@ -90,7 +94,7 @@ if $wall_follow; then
     stop_group "$follower"      # stops the car
     follower=
     if $finished && [ "$laps" -gt 0 ] && [ "$shown" -lt "$laps" ]; then
-        echo "The wall follower stopped after $shown of $laps lap(s), see $follow_log" >&2
+        echo "$follow_launch stopped after $shown of $laps lap(s), see $follow_log" >&2
         read -rp "Press Enter to save the map anyway (Ctrl-C to abort)... " </dev/tty
     fi
 else
@@ -108,5 +112,15 @@ done
 stop_group "$mapping"
 trap - EXIT
 
-ros2 run planning build_raceline "$name"
+# build_raceline: 0 clean mintime line, 2 a raceline but NOT a clean mintime line (fallback), 1 none
+status=0
+ros2 run planning build_raceline "$name" || status=$?
+if [ "$status" -eq 2 ]; then
+    echo "WARNING: $tracks/$name/raceline.csv is NOT a clean TUM mintime line (fallback, see the WARNING above" \
+         "and its '# raceline:' header line). Check preview.png before racing." >&2
+elif [ "$status" -ne 0 ]; then
+    echo "build_raceline failed: no raceline for $name (map saved; rerun: ros2 run planning build_raceline $name)" >&2
+    exit "$status"
+fi
 echo "Done: $tracks/$name (check preview.png). Race with: race $name  (scripts/race.sh)"
+exit "$status"

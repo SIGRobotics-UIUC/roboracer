@@ -1,5 +1,6 @@
 import base64
 import gzip
+import math
 
 import pytest
 from std_msgs.msg import Bool, Float32
@@ -154,3 +155,14 @@ def test_jump_scaled_by_stamp_gap():
     assert is_jump(prev, (0.02, 1.3, 0.0, 0.0))          # short respawn at speed (speed zeroed)
     assert is_jump(prev, (0.02, 3.0, 0.0, 0.0))          # teleport
     assert is_jump((0.0, 0.0, 0.0, 0.0), (0.02, 1.5, 0.0, 0.0))
+
+
+@pytest.mark.parametrize('bad', [math.nan, math.inf, -math.inf])
+def test_non_finite_commands_sent_as_zero(bridge, bad):
+    # str(nan) would go to the sim as 'nan'
+    bridge._throttle_cb(Float32(data=0.5))
+    bridge._steering_cb(Float32(data=0.5))
+    bridge._throttle_cb(Float32(data=bad))
+    bridge._steering_cb(Float32(data=bad))
+    reply = bridge._reply()
+    assert reply['V1 Throttle'] == '0.0' and reply['V1 Steering'] == '0.0'

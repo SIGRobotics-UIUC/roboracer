@@ -18,6 +18,9 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>planning</exec_depend>   <!-- obstacle_spliner_node (race.launch.py avoid:=true) -->
   <exec_depend>perception</exec_depend>   <!-- perception.tracks, localization.launch.py -->
 
   <test_depend>python3-pytest</test_depend>

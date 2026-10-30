@@ -1,5 +1,5 @@
 diff --git a/opt_mintime_traj/src/opt_mintime.py b/opt_mintime_traj/src/opt_mintime.py
-index cd5b755..6138870 100644
+index cd5b755..ab5b081 100644
 --- a/opt_mintime_traj/src/opt_mintime.py
 +++ b/opt_mintime_traj/src/opt_mintime.py
 @@ -187,9 +187,12 @@ def opt_mintime(reftrack: np.ndarray,
@@ -111,7 +111,22 @@ index cd5b755..6138870 100644
          ubg.append([0.0])
  
          # path constraint: actor dynamic
-@@ -787,7 +790,7 @@ def opt_mintime(reftrack: np.ndarray,
+@@ -777,17 +780,18 @@ def opt_mintime(reftrack: np.ndarray,
+             ubg.append([delta_max / (veh["t_delta"]), f_drive_max / (veh["t_drive"]), np.inf, np.inf])
+ 
+         # path constraint: safe trajectories with acceleration ellipse
++        # (one row, the same feasible set as upstream's two rows, one per sign of ax: with two rows IPOPT
++        # failed on iros2026, iros2026_v2 and berlin (restoration failed / max iterations), with one it converges)
+         if pars["optim_opts"]["safe_traj"]:
+             g.append((ca.fmax(axk, 0) / pars["optim_opts"]["ax_pos_safe"]) ** 2
++                     + (ca.fmin(axk, 0) / pars["optim_opts"]["ax_neg_safe"]) ** 2
+                      + (ayk / pars["optim_opts"]["ay_safe"]) ** 2)
+-            g.append((ca.fmin(axk, 0) / pars["optim_opts"]["ax_neg_safe"]) ** 2
+-                     + (ayk / pars["optim_opts"]["ay_safe"]) ** 2)
+-            lbg.append([0.0] * 2)
+-            ubg.append([1.0] * 2)
++            lbg.append([0.0])
++            ubg.append([1.0])
  
          # append controls (for regularization)
          delta_p.append(Uk[0] * delta_s)

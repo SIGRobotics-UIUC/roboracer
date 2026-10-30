@@ -3,7 +3,7 @@
 <package format="3">
   <name>perception</name>
   <version>0.0.0</version>
-  <description>Cartographer mapping and localization, saving maps to tracks/&lt;name&gt;/, and an experimental IMU EKF velocity estimate.</description>
+  <description>Cartographer mapping and localization, particle filter (MCL) localization, saving maps to tracks/&lt;name&gt;/, and an experimental IMU EKF velocity estimate.</description>
   <maintainer email="todo@todo.todo">SIGRobotics</maintainer>
   <license>TODO: License declaration</license>
 
@@ -20,6 +20,9 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>      <!-- mcl: distance field -->
+  <exec_depend>python3-pil</exec_depend>        <!-- mcl: map.pgm -->
+  <exec_depend>tf2_ros</exec_depend>            <!-- mcl: map -> odom, base_link -> laser -->
 
   <test_depend>python3-pytest</test_depend>
 

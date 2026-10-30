@@ -14,6 +14,12 @@
   <exec_depend>python3-matplotlib</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-pil</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>   <!-- obstacle_spliner_node: lidar pose on the car -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <!-- apt deps + the TUM optimizer venv (/opt/tum_venv): docker/install_deps.sh, run by the Dockerfile -->
 
   <test_depend>python3-pytest</test_depend>

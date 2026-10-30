@@ -27,6 +27,8 @@ from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Float32
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 
+from autodrive_bridge.single_instance import DuplicateGuard, exit_with_parent, topic_publishers
+
 
 def yaw_from_quat(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
@@ -99,6 +101,11 @@ class Adapter(Node):
         self.last_ctrl_t = None
         self.stuck_since = None       # auto_unstick state
         self.reverse_until = None
+        # A second adapter (an overlapping bridge restart) holds its output while this one runs: its
+        # /scan and /sensors/imu/raw would repeat this one's stamps (Cartographer aborts on duplicate IMU
+        # stamps), its commands would fight this one's.
+        self.guard = DuplicateGuard(self, '/scan, /sensors/imu/raw, ground truth and commands',
+                                    lambda: topic_publishers(self, self.ns + '/throttle_command'))
 
         # Commands go out as each /drive arrives (drive_cb), so the bridge's next reply to the sim
         # carries it. A 50 Hz command timer used to add ~10 ms and drop 2/3 of pure pursuit's
@@ -129,14 +136,20 @@ class Adapter(Node):
         self.static_tf.sendTransform(transforms)
 
     def imu_cb(self, msg:Imu):
+        if not self.guard.ok:   # a second copy's stamps duplicate this one's (Cartographer aborts)
+            return
         self.imu_pub.publish(msg)   # keeps fast_bridge's stamp, the sim frame it arrived in
 
     def odom_cb(self, msg:Odometry):
-        self.vx = msg.twist.twist.linear.x
+        vx = msg.twist.twist.linear.x
+        if math.isfinite(vx):   # a NaN speed would make the throttle NaN, clamped to full throttle
+            self.vx = vx
 
     def sim_odom_cb(self, msg:Odometry):
         """Sim ground truth, projected to 2D, in the sim world frame ('world', not Cartographer's
         'map'): /ground_truth/odom, /ground_truth/pose, TF world -> ground_truth. Debugging only."""
+        if not self.guard.ok:
+            return
         src = msg.pose.pose
         qx, qy, qz, qw = quat_from_yaw(yaw_from_quat(src.orientation))
 
@@ -167,14 +180,29 @@ class Adapter(Node):
         self.tf.sendTransform(tf)
 
     def lidar_cb(self, msg:LaserScan):
+        if not self.guard.ok:
+            return
         msg.header.frame_id = 'laser'
         self.scan_pub.publish(msg)  # keeps fast_bridge's stamp, the sim frame the scan arrived in
 
     # ---------------- stack -> AutoDRIVE ----------------
     def drive_cb(self, msg):
         """Throttle (speed PI + feedforward) and normalized steering for each /drive."""
+        if not self.guard.ok:
+            return
         v_ref = float(msg.drive.speed)
         steer = float(msg.drive.steering_angle)
+        if not (math.isfinite(v_ref) and math.isfinite(steer)):
+            # min/max clamps pass NaN through as the bound (full steering lock, a speed ramp that only
+            # climbs), so stop instead; the next finite /drive ramps from the measured speed
+            self.get_logger().error(f'/drive not finite (speed {v_ref}, steering {steer}): stopping',
+                                    throttle_duration_sec=1.0)
+            self.integral = 0.0
+            self.v_cmd = 0.0
+            self.last_ctrl_t = None
+            self.throttle_pub.publish(Float32(data=0.0))
+            self.steer_pub.publish(Float32(data=0.0))
+            return
         now = self.get_clock().now()
         gap = None if self.last_ctrl_t is None else (now - self.last_ctrl_t).nanoseconds * 1e-9
         if gap is None or gap > self.cmd_timeout:
@@ -240,6 +268,7 @@ def main():
     # zero command below can be published (rclpy's handler shut the context down first and it
     # raised). Under ros2 launch, fast_bridge is stopping too and may not forward it; it sends the
     # sim a zero command itself when it stops. Python handles signals only between waits: wake every 0.1 s.
+    exit_with_parent()
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     node = Adapter()
@@ -249,7 +278,8 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        node.throttle_pub.publish(Float32(data=0.0))
-        node.steer_pub.publish(Float32(data=0.0))
+        if node.guard.ok:   # a held copy leaves the running one's commands alone
+            node.throttle_pub.publish(Float32(data=0.0))
+            node.steer_pub.publish(Float32(data=0.0))
         node.destroy_node()
         rclpy.try_shutdown()

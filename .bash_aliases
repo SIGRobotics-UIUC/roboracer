@@ -21,7 +21,8 @@ alias sim="ros2 launch autodrive_bridge autodrive_launch.py"
 # Keyboard teleop on /drive (W/S speed, A/D steer, X stop, R reset)
 alias kb="ros2 run autodrive_bridge teleop_keyboard"
 
-# Map a new track and plan its min-time raceline: map-track <name> [--wall-follow [--laps N]]
+# Map a new track and plan its min-time raceline: map-track <name> [--wall-follow | --gap-follow] [--laps N]
+# (a fallback raceline instead of mintime ends in a WARNING and exit status 2)
 alias map-track="~/ws/scripts/map_track.sh"
 
 # Race a mapped track: race <name> [speed_scale:=0.5]
@@ -32,6 +33,7 @@ alias race="~/ws/scripts/race.sh"
 alias ftg="ros2 launch control follow_the_gap.launch.py"
 
 # Re-plan the raceline of an existing map: plan <name>
+# (exit 0 clean mintime line, 2 fallback line with a WARNING, 1 no raceline)
 alias plan="ros2 run planning build_raceline"
 
 # Stop car instantly (publish 0 m/s speed and 0 rad steer)

@@ -1,5 +1,9 @@
+import math
+
 import pytest
 from ackermann_msgs.msg import AckermannDriveStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu, LaserScan
 from rclpy.time import Time
 
 from autodrive_bridge.adapter import Adapter, move_towards
@@ -13,6 +17,16 @@ class FakeClock:
 
     def now(self):
         return Time(nanoseconds=self.ns)
+
+
+class Count:
+    def __init__(self):
+        self.n = 0
+
+    def publish(self, msg):
+        self.n += 1
+
+    sendTransform = publish
 
 
 class Recorder:
@@ -29,15 +43,17 @@ def node():
     n.fake_clock = FakeClock()
     n.get_clock = lambda: n.fake_clock   # deterministic dt
     n.throttle_pub, n.steer_pub = Recorder(), Recorder()
+    n.guard.ok = True   # alone (the guard's own tests: test_single_instance.py)
     yield n
     n.destroy_node()
 
 
-def drive(node, speed, dt=DT):
+def drive(node, speed, dt=DT, steer=0.0):
     """One /drive dt seconds after the last; returns the throttle sent."""
     node.fake_clock.ns += int(round(dt * 1e9))
     msg = AckermannDriveStamped()
     msg.drive.speed = float(speed)
+    msg.drive.steering_angle = float(steer)
     node.drive_cb(msg)
     return node.throttle_pub.data[-1]
 
@@ -140,3 +156,66 @@ def test_zero_request_at_rest_clears_the_ramp(node):
     node.vx = 0.0
     assert drive(node, 0.0) == 0.0
     assert node.v_cmd == 0.0
+
+
+@pytest.mark.parametrize('bad', [math.nan, math.inf, -math.inf])
+def test_non_finite_speed_stops(node, bad):
+    node.vx = 3.0
+    for _ in range(20):
+        drive(node, 4.45, steer=0.2)
+    assert drive(node, bad, steer=0.2) == 0.0
+    assert node.steer_pub.data[-1] == 0.0
+    assert node.v_cmd == 0.0 and node.integral == 0.0
+    # the next finite /drive ramps from the measured speed again, as after a /drive gap
+    assert drive(node, 4.45) > 0.0
+    assert node.v_cmd == pytest.approx(3.0 + node.max_accel * 0.02)
+
+
+@pytest.mark.parametrize('bad', [math.nan, math.inf, -math.inf])
+def test_non_finite_steering_stops(node, bad):
+    # max(-1, min(1, nan)) is 1.0: full left lock
+    node.vx = 3.0
+    assert drive(node, 4.45, steer=bad) == 0.0
+    assert node.steer_pub.data[-1] == 0.0
+
+
+def test_repeated_nan_speed_does_not_ramp(node):
+    # move_towards(v, nan, m) added +m every call
+    for _ in range(100):
+        drive(node, math.nan)
+    assert node.v_cmd == 0.0
+    assert set(node.throttle_pub.data) == {0.0}
+
+
+@pytest.mark.parametrize('bad', [math.nan, math.inf])
+def test_non_finite_odom_ignored(node, bad):
+    # a NaN vx made the throttle NaN, which the clamp turned into +1.0
+    msg = Odometry()
+    msg.twist.twist.linear.x = 2.0
+    node.odom_cb(msg)
+    msg.twist.twist.linear.x = bad
+    node.odom_cb(msg)
+    assert node.vx == 2.0
+    throttle = drive(node, 2.0)
+    assert math.isfinite(throttle) and throttle < 0.2
+
+
+def test_held_while_another_adapter_runs(node):
+    # a second adapter republishing the old bridge's IMU and scans repeats their stamps: Cartographer aborts
+    node.guard.ok = False
+    pubs = {name: Count() for name in ('scan_pub', 'imu_pub', 'gt_odom_pub', 'gt_pose_pub', 'tf')}
+    for name, pub in pubs.items():
+        setattr(node, name, pub)
+    msg = AckermannDriveStamped()
+    msg.drive.speed = 4.0
+    node.drive_cb(msg)
+    node.imu_cb(Imu())
+    node.lidar_cb(LaserScan())
+    node.sim_odom_cb(Odometry())
+    assert node.throttle_pub.data == [] and node.steer_pub.data == []
+    assert all(p.n == 0 for p in pubs.values())
+    node.guard.ok = True
+    node.imu_cb(Imu())
+    node.lidar_cb(LaserScan())
+    node.sim_odom_cb(Odometry())
+    assert all(p.n == 1 for p in pubs.values())

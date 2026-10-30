@@ -8,7 +8,8 @@ adapter:
     laser_x: 0.2733             # rear axle -> lidar
     speed_kff: 0.04             # throttle per m/s; the throttle is motor torque, settling at ~25 m/s per unit
     speed_kp: 0.006
-    speed_kp_brake: 0.1         # kp when faster than /drive: 8 -> 3 m/s gives throttle -0.38 (brakes); not yet tuned in sim
+    speed_kp_brake: 0.03        # kp when faster than /drive: 8 -> 3 m/s gives throttle -0.03 (brakes). 0.1 turned /odom
+                                # noise (std 0.16 m/s vs ground truth) into brake taps: 88 surge/brake swings in 24 s on Porto
     speed_ki: 0.006
     speed_i_max: 1.0
     max_throttle: 1.0

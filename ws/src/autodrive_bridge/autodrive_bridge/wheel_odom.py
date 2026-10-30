@@ -30,6 +30,8 @@ from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32
 from tf2_ros import TransformBroadcaster
 
+from autodrive_bridge.single_instance import DuplicateGuard, exit_with_parent, topic_publishers
+
 
 def reset_jump(a, b, wheel_radius, max_speed):
     """True if the wheels turned farther between consecutive encoder samples a, b = (t, left, right)
@@ -69,6 +71,11 @@ class WheelOdom(Node):
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.tf = TransformBroadcaster(self)
+        # Two wheel_odoms (an overlapping bridge restart) published /odom and TF odom -> base_link with
+        # the same stamps, and Cartographer aborted: a second one integrates but publishes nothing
+        # while the first runs.
+        self.guard = DuplicateGuard(self, '/odom and TF odom -> base_link',
+                                    lambda: topic_publishers(self, '/odom'))
 
         self.left = None
         self.prev = None              # (t, left angle, right angle), last received
@@ -145,6 +152,8 @@ class WheelOdom(Node):
         yaw_rate = self.gyro_z if gyro else speed * curvature
         qz, qw = math.sin(self.yaw / 2.0), math.cos(self.yaw / 2.0)
 
+        if not self.guard.ok:
+            return
         odom = Odometry()
         odom.header.stamp = stamp
         odom.header.frame_id = 'odom'
@@ -169,6 +178,7 @@ class WheelOdom(Node):
 
 
 def main():
+    exit_with_parent()
     rclpy.init()
     node = WheelOdom()
     try:

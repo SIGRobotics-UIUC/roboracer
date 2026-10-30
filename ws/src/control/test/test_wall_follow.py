@@ -6,6 +6,7 @@ Needs a sourced ROS 2 environment with the control package built:
 """
 import math
 import os
+import random
 import signal
 import subprocess
 import time
@@ -22,6 +23,7 @@ from sensor_msgs.msg import LaserScan  # noqa: E402
 from control.wall_follow_node import LapCounter  # noqa: E402
 
 SPEED = 1.0
+DOMAIN = random.randint(1, 101)  # not 0: the live stack (bridge, sim car) runs there
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'vehicle.yaml')) as f:
     MAX_STEER = yaml.safe_load(f)['/**']['ros__parameters']['max_steering_angle']
 
@@ -68,7 +70,7 @@ def corridor_scan(left, right, n=1080, angle_min=-2.35619, inc=0.004363323, rang
 
 @pytest.fixture(scope='module')
 def ros():
-    rclpy.init()
+    rclpy.init(domain_id=DOMAIN)
     node = rclpy.create_node('wall_follow_test')
     yield node
     node.destroy_node()
@@ -78,7 +80,8 @@ def ros():
 def launch(*args):
     return subprocess.Popen(
         ['ros2', 'launch', 'control', 'wall_follow.launch.py', f'speed:={SPEED}', *args],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+        env=dict(os.environ, ROS_DOMAIN_ID=str(DOMAIN)))
 
 
 def stop(proc):
