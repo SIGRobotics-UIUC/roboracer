@@ -31,3 +31,19 @@ def test_width_opt_fits_the_car():
     width = json.loads(ini.get('GENERAL_OPTIONS', 'veh_params'))['width']
     width_opt = json.loads(ini.get('OPTIMIZATION_OPTIONS', 'optim_opts_mintime'))['width_opt']
     assert width_opt >= width   # the car fits inside its own margin
+
+
+def test_map_model_matches_planning():
+    with open(os.path.join(HERE, '..', '..', 'control', 'config', 'map_model.json')) as f:
+        model = json.load(f)
+    ini = configparser.ConfigParser()
+    ini.read(RACECAR)
+    veh = json.loads(ini.get('GENERAL_OPTIONS', 'veh_params'))
+    opt = json.loads(ini.get('OPTIMIZATION_OPTIONS', 'vehicle_params_mintime'))
+    tire = json.loads(ini.get('OPTIMIZATION_OPTIONS', 'tire_params_mintime'))
+    assert model['mass'] == pytest.approx(veh['mass'])
+    for key, source in [('lf','wheelbase_front'), ('lr','wheelbase_rear'), ('inertia','I_z'), ('h_cg','cog_z')]:
+        assert model[key] == pytest.approx(opt[source])
+    for axle in ('front', 'rear'):
+        for key in ('b','c','e'):
+            assert model[f'{key}_{axle}'] == pytest.approx(tire[f'{key.upper()}_{axle}'])

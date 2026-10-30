@@ -1,0 +1,1 @@
+{"model":"pacejka","lf":0.175,"lr":0.155,"mass":3.906,"inertia":0.0492,"h_cg":0.074,"mu":0.7,"b_front":10.0,"c_front":1.6,"d_front":1.0,"e_front":0.5,"b_rear":10.0,"c_rear":1.6,"d_rear":1.0,"e_rear":0.5,"c_front_linear":10.0,"c_rear_linear":10.0}

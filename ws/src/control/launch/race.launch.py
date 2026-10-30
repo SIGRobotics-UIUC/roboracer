@@ -7,7 +7,7 @@ the pose mapping started from (ws/scripts/race.sh resets the sim car there). /lo
 /tracked_pose once Cartographer has localized (localization_gate), so the car waits for that.
 """
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
@@ -25,5 +25,6 @@ def generate_launch_description():
         DeclareLaunchArgument('speed_scale', default_value='0.5', description='drive speed = raceline vx * speed_scale'),
         DeclareLaunchArgument('max_speed', default_value='0.0', description='cap on the drive speed [m/s], 0 = no cap'),
         include('perception', 'localization.launch.py', ['track']),
-        include('control', 'pure_pursuit.launch.py', ['track', 'pose_topic', 'speed_scale', 'max_speed']),
+        DeclareLaunchArgument('controller', default_value='pure_pursuit'),
+        OpaqueFunction(function=lambda context: [include('control', {'pure_pursuit':'pure_pursuit.launch.py','map':'map.launch.py'}[LaunchConfiguration('controller').perform(context)], ['track', 'pose_topic', 'speed_scale', 'max_speed'])]),
     ])

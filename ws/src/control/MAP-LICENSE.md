@@ -1,0 +1,1 @@
+`control/map_dynamics.py` and `control/map_lut.py` adapt code from ETH-PBL/MAP-Controller, revision `5cce3319a063e7a70c25de5d1bad3b9b8d278ee6`, under GPL-3.0. The single-track dynamics are by Matthias Althoff, TUM Cyber-Physical Systems Group (2020a). See `GPL-3.0.txt`. Other pre-existing control files retain their MIT provenance.
