@@ -7,7 +7,8 @@ map_origin records the map origin in the sim world for map_to_world.yaml (does n
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -27,6 +28,8 @@ def generate_launch_description():
     map_origin = Node(package='perception', executable='map_origin', name='map_origin', output='screen')
 
     return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        SetParameter(name='use_sim_time', value=ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)),
         DeclareLaunchArgument('track', description='track name; save with: ros2 run perception save_map <track>'),
         LogInfo(msg=['Mapping track "', LaunchConfiguration('track'),
                      '". When done: ros2 run perception save_map ', LaunchConfiguration('track')]),

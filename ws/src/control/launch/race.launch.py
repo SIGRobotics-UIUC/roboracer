@@ -21,7 +21,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from perception.tracks import track_dir
@@ -55,11 +56,13 @@ def generate_launch_description():
     def include(package, launch_file, args, condition=None):
         return IncludeLaunchDescription(
             PathJoinSubstitution([FindPackageShare(package), 'launch', launch_file]),
-            launch_arguments={a: LaunchConfiguration(a) for a in args}.items(), condition=condition)
+            launch_arguments={a: LaunchConfiguration(a) for a in ['use_sim_time', *args]}.items(), condition=condition)
 
     use_mcl = PythonExpression(["'", LaunchConfiguration('localizer'), "' == 'mcl'"])
 
     return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        SetParameter(name='use_sim_time', value=ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)),
         DeclareLaunchArgument('track', description='track name under ws/tracks/'),
         DeclareLaunchArgument('pose_topic', default_value='/localized_pose',
                               description="a localizer's PoseStamped in the map frame"),

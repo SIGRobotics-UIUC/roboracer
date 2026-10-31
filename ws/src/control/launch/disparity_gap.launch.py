@@ -9,13 +9,15 @@ shuts down with it). scripts/map_track.sh --gap-follow runs this during mapping.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, Shutdown
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        SetParameter(name='use_sim_time', value=ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)),
         DeclareLaunchArgument('speed', default_value='1.0', description='speed cap [m/s]'),
         DeclareLaunchArgument('laps', default_value='0', description='stop after this many laps, 0 = never'),
         DeclareLaunchArgument('pose_topic', default_value='/tracked_pose',

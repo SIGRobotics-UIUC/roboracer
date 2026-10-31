@@ -33,4 +33,4 @@ fi
 
 reset_sim_car
 
-exec ros2 launch control race.launch.py track:="$name" "$@"
+exec ros2 launch control race.launch.py track:="$name" use_sim_time:="$sim_time" "$@"

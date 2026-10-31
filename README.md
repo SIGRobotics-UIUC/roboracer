@@ -76,6 +76,12 @@ ros2 launch autodrive_bridge autodrive_launch.py                # alias: sim
 ```
 
 Start the simulator, **Connect** to `127.0.0.1:4567` and set **Driving Mode** to **Autonomous**.
+
+Simulator launches use a shared monotonic `/clock` (`use_sim_time:=true`) to prevent host clock
+corrections from corrupting odometry and localization. Direct `ros2 run` consumers need
+`--ros-args -p use_sim_time:=true`; record bags with `--use-sim-time`. For hardware, pass
+`use_sim_time:=false` consistently, or use `USE_SIM_TIME=false` with the mapping/racing scripts.
+See [the timing fix and validation plan](docs/hairpin_timing_fix.md) and [MAP handoff](docs/MAP_HANDOFF.md).
 With the stock simulator, restarting the bridge while it is connected makes it reconnect in a loop,
 so **Disconnect** first.
 

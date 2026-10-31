@@ -79,7 +79,7 @@ def ros():
 
 def launch(*args):
     return subprocess.Popen(
-        ['ros2', 'launch', 'control', 'wall_follow.launch.py', f'speed:={SPEED}', *args],
+        ['ros2', 'launch', 'control', 'wall_follow.launch.py', 'use_sim_time:=false', f'speed:={SPEED}', *args],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
         env=dict(os.environ, ROS_DOMAIN_ID=str(DOMAIN)))
 

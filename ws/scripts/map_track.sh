@@ -57,7 +57,7 @@ reset_sim_car
 # job control: the launch gets its own process group and keeps SIGINT (a script's background
 # jobs ignore it otherwise), so stopping it stops every node it started
 set -m
-ros2 launch perception mapping.launch.py track:="$name" >"$log" 2>&1 &
+ros2 launch perception mapping.launch.py track:="$name" use_sim_time:="$sim_time" >"$log" 2>&1 &
 mapping=$!
 set +m
 follower=
@@ -72,7 +72,7 @@ echo "Mapping '$name' (log: $log)."
 
 if [ -n "$follow_launch" ]; then
     set -m
-    ros2 launch control "$follow_launch" laps:="$laps" "${follow_args[@]}" >"$follow_log" 2>&1 &
+    ros2 launch control "$follow_launch" use_sim_time:="$sim_time" laps:="$laps" "${follow_args[@]}" >"$follow_log" 2>&1 &
     follower=$!
     set +m
     sleep 2

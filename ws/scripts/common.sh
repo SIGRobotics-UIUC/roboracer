@@ -1,5 +1,6 @@
 # Sourced by map_track.sh and race.sh: ROS environment, tracks dir, sim reset.
 tracks=${TRACKS_DIR:-$HOME/ws/tracks}
+sim_time=${USE_SIM_TIME:-true}  # false for hardware / host wall-clock operation
 source /opt/ros/humble/setup.bash
 source "$HOME/ws/install/setup.bash"
 

@@ -30,6 +30,7 @@ from io import BytesIO
 import gevent
 import numpy as np
 import rclpy
+from rclpy.clock import Clock as RclClock, ClockType
 import socketio
 from cv_bridge import CvBridge
 from gevent import pywsgi
@@ -42,8 +43,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Imu, JointState, LaserScan, Image
 from std_msgs.msg import Bool, Float32, Int32, String
+from builtin_interfaces.msg import Time
+from rosgraph_msgs.msg import Clock
 
 from autodrive_bridge.single_instance import exit_with_parent
+from autodrive_bridge.frame_trace import FrameTrace, compact_payload
+from autodrive_bridge.steady_time import SteadyEpoch
 
 
 GRAVITY = 9.80665   # m/s^2
@@ -73,7 +78,8 @@ def gravity_in_body(q):
 
 
 class FastBridge:
-    def __init__(self):
+    def __init__(self, clock_active=True):
+        self.clock_active = clock_active
         self.node = rclpy.create_node('fast_bridge')   # same name as in autodrive_launch.py
         p = self.node.declare_parameter
         ns = p('vehicle_ns', '/autodrive/roboracer_1').value
@@ -85,6 +91,16 @@ class FastBridge:
         self.cmd_timeout = p('cmd_timeout', 0.5).value   # s without a command -> reply zeros (stops the car)
         self.publish_restricted_topics = p('publish_restricted_topics', True).value
         self.publish_camera = p('publish_camera', False).value
+        self.steady_epoch = SteadyEpoch() if p('publish_clock', False).value else None
+        if self.steady_epoch:
+            self.clock_lock = threading.Lock()
+            self.clock_pub = self.node.create_publisher(Clock, '/clock',
+                QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+            self.clock_timer = self.node.create_timer(.01, self.publish_clock,
+                clock=RclClock(clock_type=ClockType.STEADY_TIME))
+        trace_path = p('frame_trace_path', '').value
+        self.trace = FrameTrace(trace_path) if trace_path else None
+        p('frame_trace_enabled', bool(trace_path))
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
         n = self.node
@@ -182,7 +198,7 @@ class FastBridge:
 
     def on_frame(self, d):
         t_in = time.perf_counter()
-        stamp = self.node.get_clock().now().to_msg()
+        stamp = self.publish_clock() if self.steady_epoch else self.node.get_clock().now().to_msg()
         P = self.pub
         # Restricted only: without ground truth the gate would restart a respawned car at the map origin.
         seen = self.sim_reset(d) if self.publish_restricted_topics else None
@@ -259,8 +275,27 @@ class FastBridge:
             P['best_lap_time'].publish(Float32(data=float(d['V1 Best Lap Time'])))
 
         reply = self._reply()
+        if self.trace and self.node.get_parameter('frame_trace_enabled').value:
+            self.trace.add({'arrival_monotonic_ns': int(t_in * 1e9),
+                            'ros_stamp_ns': stamp.sec * 1000000000 + stamp.nanosec,
+                            'bridge_work_ns': int((time.perf_counter() - t_in) * 1e9),
+                            'payload_keys': sorted(d), 'payload': compact_payload(d),
+                            'reply': reply})
         self._stats(t_in)
         return reply
+
+    def stamp(self):
+        sec, nanosec = divmod(self.steady_epoch.now_ns(), 1000000000)
+        return Time(sec=sec, nanosec=nanosec)
+
+    def publish_clock(self):
+        # Timer and websocket callbacks share a publisher: serialize writes so
+        # a preempted timer cannot publish an older time after a sensor frame.
+        with self.clock_lock:
+            stamp = self.stamp()
+            if self.clock_active:
+                self.clock_pub.publish(Clock(clock=stamp))
+            return stamp
 
     def sim_reset(self, d):
         """The reason if this frame shows a sim reset, else None: the collision count changed (a crash
@@ -336,7 +371,7 @@ def main():
     # and the process outlived ros2 launch (SIGINT, then SIGTERM) with :4567 still bound.
     exit_with_parent()
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-    bridge = FastBridge()
+    bridge = FastBridge(clock_active=False)
     executor = SingleThreadedExecutor()
     executor.add_node(bridge.node)
     def spin_until_shutdown():
@@ -379,6 +414,10 @@ def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         gevent.signal_handler(sig, lambda: gevent.spawn(stop))
     try:
+        # Own the socket before publishing /clock. A failed overlapping bridge
+        # restart must not inject a different epoch into the running stack.
+        server.start()
+        bridge.clock_active = True
         server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -389,6 +428,8 @@ def main():
                                        'Stop it first (Ctrl-C in its terminal)')
         raise SystemExit(1)
     finally:
+        if bridge.trace:
+            bridge.node.get_logger().info(f'frame trace closed: {bridge.trace.close()}')
         # context first: it wakes executor.spin, which would otherwise still be in its wait at exit
         # (std::terminate, exit code -6)
         rclpy.try_shutdown()

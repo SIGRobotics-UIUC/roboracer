@@ -17,6 +17,7 @@ from launch.actions import DeclareLaunchArgument, Shutdown
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -28,15 +29,22 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_restricted_topics', default_value='true'),
         # nothing in the stack uses the camera, and decoding it every frame slows the sim loop
         DeclareLaunchArgument('publish_camera', default_value='false'),
+        DeclareLaunchArgument('use_sim_time', default_value='true',
+                              description='shared monotonic transport clock; false uses host wall time'),
         DeclareLaunchArgument('port', default_value='4567'),   # the sim's Connect port
+        DeclareLaunchArgument('frame_trace_path', default_value=''),
         Node(package='autodrive_bridge', executable='fast_bridge', name='fast_bridge', output='screen',
              parameters=[{'publish_restricted_topics': LaunchConfiguration('publish_restricted_topics'),
+                          'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
+                          'publish_clock': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
                           'publish_camera': LaunchConfiguration('publish_camera'),
+                          'frame_trace_path': ParameterValue(LaunchConfiguration('frame_trace_path'), value_type=str),
                           'port': LaunchConfiguration('port')}],
              on_exit=Shutdown(reason='fast_bridge exited')),
         Node(package='autodrive_bridge', executable='adapter', name='adapter', output='screen',
-             parameters=[vehicle, config]),
+             parameters=[vehicle, config, {'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}]),
         Node(package='autodrive_bridge', executable='wheel_odom', name='wheel_odom', output='screen',
-             parameters=[vehicle, config]),
-        Node(package='foxglove_bridge', executable='foxglove_bridge', name='foxglove_bridge'),
+             parameters=[vehicle, config, {'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}]),
+        Node(package='foxglove_bridge', executable='foxglove_bridge', name='foxglove_bridge',
+             parameters=[{'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}]),
     ])

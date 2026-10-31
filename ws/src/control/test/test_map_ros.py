@@ -50,20 +50,22 @@ def test_map_ros_commands_stops_and_recovers():
             while time.monotonic() < end:
                 executor.spin_once(timeout_sec=.01)
 
-        def publish(frame='map', age=0., x=2., speed=1.):
-            stamp = tester.get_clock().now().nanoseconds - int(age * 1e9)
-            pose = PoseStamped()
-            pose.header.frame_id = frame
-            pose.header.stamp.sec, pose.header.stamp.nanosec = divmod(stamp, 10**9)
-            pose.pose.position.x = x
-            pose.pose.orientation.z = math.sin(math.pi / 4)
-            pose.pose.orientation.w = math.cos(math.pi / 4)
-            odom = Odometry()
-            odom.header.stamp = tester.get_clock().now().to_msg()
-            odom.twist.twist.linear.x = speed
-            poses.publish(pose)
-            odoms.publish(odom)
-            spin(.12)
+        def publish(frame='map', age=0., x=2., speed=1., yaw=math.pi/2, duration=.45):
+            end = time.monotonic()+duration
+            while time.monotonic() < end:
+                stamp = tester.get_clock().now().nanoseconds - int(age * 1e9)
+                pose = PoseStamped()
+                pose.header.frame_id = frame
+                pose.header.stamp.sec, pose.header.stamp.nanosec = divmod(stamp, 10**9)
+                pose.pose.position.x = x
+                pose.pose.orientation.z = math.sin(yaw/2)
+                pose.pose.orientation.w = math.cos(yaw/2)
+                odom = Odometry()
+                odom.header.stamp = tester.get_clock().now().to_msg()
+                odom.twist.twist.linear.x = speed
+                poses.publish(pose)
+                odoms.publish(odom)
+                spin(.05)
 
         try:
             end = time.monotonic() + 5
@@ -76,17 +78,25 @@ def test_map_ros_commands_stops_and_recovers():
             assert drives[-1].drive.speed == pytest.approx(1.)  # target 2 m/s at default 0.5 scale
             assert 0 < drives[-1].drive.steering_angle <= .524  # CCW target, rad
             spin(.65)
-            assert drives[-1].drive.speed == 0 and drives[-1].drive.steering_angle == 0  # timeout
+            assert drives[-1].drive.speed == 0 and drives[-1].drive.steering_angle > 0  # brake while holding steering
             publish(frame='world')
             assert drives[-1].drive.speed == 0  # invalid frame
             publish()
             assert drives[-1].drive.speed > 0  # fresh state recovers
-            publish(age=.2)
+            publish(age=.2, duration=.12)
             assert drives[-1].drive.speed == 0  # timestamp went backwards
             publish()
             assert drives[-1].drive.speed > 0  # progress reset and reacquired
-            publish(x=10.)
+            publish(x=10., duration=.12)
             assert drives[-1].drive.speed == 0  # implausible pose jump
+            publish()
+            assert drives[-1].drive.speed > 0
+            held = drives[-1].drive.steering_angle
+            publish(yaw=math.pi/2+2., duration=.45)
+            assert drives[-1].drive.speed == 0
+            assert drives[-1].drive.steering_angle == pytest.approx(held)
+            publish(duration=.12)
+            assert drives[-1].drive.speed == 0  # no immediate re-arm on one fresh pose
             publish()
             assert drives[-1].drive.speed > 0
         finally:
