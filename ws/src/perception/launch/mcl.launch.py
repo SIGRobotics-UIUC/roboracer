@@ -4,7 +4,8 @@ Monte Carlo localization (particle filter) on tracks/<track>/map.yaml, instead o
 TF map -> odom, /localized_pose (once the particle cloud has converged), /mcl/particles, /map.
 Same outputs as localization.launch.py, so control race.launch.py works with either (localizer:=mcl).
 Never run it together with localization.launch.py: both publish map -> odom.
-Parameters: config/mcl.yaml; override one with  ros2 launch perception mcl.launch.py track:=x particles:=2000
+Parameters: config/mcl.yaml. Fixed baseline: adaptive_particles:=false particles:=1000.
+Experimental KLD mode: adaptive_particles:=true (default).
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -18,8 +19,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('track', description='track name, loads tracks/<track>/map.yaml'),
         DeclareLaunchArgument('particles', default_value='1000', description='number of particles'),
+        DeclareLaunchArgument('adaptive_particles', default_value='true', description='enable KLD population'),
+        DeclareLaunchArgument('force_adaptive_resample', default_value='false'),
         Node(package='perception', executable='mcl_node', name='mcl', output='screen',
              parameters=[PathJoinSubstitution([FindPackageShare('perception'), 'config', 'mcl.yaml']), {
+                 'adaptive_particles': ParameterValue(LaunchConfiguration('adaptive_particles'), value_type=bool),
+                 'force_adaptive_resample': ParameterValue(LaunchConfiguration('force_adaptive_resample'), value_type=bool),
                  'track': ParameterValue(LaunchConfiguration('track'), value_type=str),
                  'particles': ParameterValue(LaunchConfiguration('particles'), value_type=int),
              }]),

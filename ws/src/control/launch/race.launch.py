@@ -53,6 +53,8 @@ def generate_launch_description():
         DeclareLaunchArgument('max_speed', default_value='0.0', description='cap on the drive speed [m/s], 0 = no cap'),
         DeclareLaunchArgument('avoid', default_value='false',
                               description='avoid obstacles the map did not have (obstacle_spliner_node)'),
+        DeclareLaunchArgument('adaptive_particles', default_value='true', description='MCL KLD sampling'),
+        DeclareLaunchArgument('particles', default_value='1000', description='MCL initial/fixed population'),
         DeclareLaunchArgument('localizer', default_value='cartographer',
                               description='cartographer: pure localization on map.pbstream; mcl: particle filter on map.yaml'),
         DeclareLaunchArgument('adaptive_lookahead', default_value='true',
@@ -62,7 +64,7 @@ def generate_launch_description():
         DeclareLaunchArgument('adaptive_lookahead_min_time', default_value='0.25',
                               description='with adaptive_lookahead: but lookahead >= min_time x speed [s]'),
         include('perception', 'localization.launch.py', ['track'], UnlessCondition(use_mcl)),
-        include('perception', 'mcl.launch.py', ['track'], IfCondition(use_mcl)),
+        include('perception', 'mcl.launch.py', ['track', 'adaptive_particles', 'particles'], IfCondition(use_mcl)),
         include('control', 'pure_pursuit.launch.py', [
             'track', 'pose_topic', 'speed_scale', 'max_speed', 'avoid',
             'adaptive_lookahead', 'adaptive_lookahead_cut', 'adaptive_lookahead_min_time']),

@@ -112,11 +112,12 @@ class Car:
         return p.position.x, p.position.y, 2.0 * math.atan2(p.orientation.z, p.orientation.w)
 
 
-@pytest.fixture
-def car(tracks, lmap):
+@pytest.fixture(params=[False, True], ids=["fixed", "adaptive"])
+def car(tracks, lmap, request):
     cars = []
 
     def make(**params):
+        params.setdefault("adaptive_particles", request.param)
         cars.append(Car(lmap, **params))
         return cars[-1]
     yield make
@@ -796,3 +797,57 @@ def test_a_reverify_while_driving_never_moves_the_car_on_one_search(car):
     c.node.on_verify([(far, 0.99)], (far, [], 'fit 0.99'), (0.0, 0.0, 0.0), 1.0, 0.99, 0.3, here, may_move=False)
     assert pose_error(here, c.node.pf.estimate())[0] < 0.05
     assert c.node.alternatives is not None and any(pose_error(far, q)[0] < 0.2 for q in c.node.alternatives.poses)
+
+
+def test_cloud_publication_after_population_change(car):
+    c = car()
+    pf = c.node.pf
+    pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    pf.resample(force=True)
+    clouds = []
+    c.node.particles_pub.publish = clouds.append
+    c.node.publish_cloud(c.node.get_clock().now().to_msg())
+    assert clouds[-1].header.frame_id == 'map'
+    assert len(clouds[-1].poses) == len(pf.p[::max(1, pf.n // 200)])
+    assert all(p.position.x == pytest.approx(1.45) for p in clouds[-1].poses)
+
+
+@pytest.mark.parametrize('event', ['find', 'verify', 'relocate', 'switch', 'initialpose', 'local'])
+@pytest.mark.parametrize('floor,maximum', [(1000, 2000), (1200, 500)])
+def test_recovery_callers_raise_population_but_local_reanchors_do_not(car, event, floor, maximum):
+    from types import SimpleNamespace
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+
+    c = car(recovery_min_particles=floor, max_particles=maximum)
+    node, here, far = c.node, (1.45, 1.45, 0.0), (5.0, 1.45, 0.0)
+    node.odom_cb(c.odom(here))
+    node.init_filter(here, 'test', quiet=True)
+    node.pf.init_gaussian(here, 0, 0)
+    node.pf.resample(force=True)
+    before = node.pf.n
+    node.localized = True
+    choice = (far, [], 'test')
+    if event == 'find':
+        node.search = 'lost'
+        node.on_find([], choice, (0, 0, 0), 1, 'full')
+    elif event == 'verify':
+        node.on_verify([], choice, (0, 0, 0), 1, .99, .1, here)
+    elif event == 'relocate':
+        for _ in range(2):
+            node.on_check(choice, (0, 0, 0), 1, .99, .1, here)
+    elif event == 'switch':
+        node.alternatives = SimpleNamespace(update=lambda *a: (far, 2, 0), poses=[], odom0=here, travelled=1.0)
+        node.validate([], [], LASER, here)
+    elif event == 'initialpose':
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.pose.pose.position.x, msg.pose.pose.position.y = far[:2]
+        msg.pose.pose.orientation.w = 1.0
+        node.initialpose_cb(msg)
+    else:
+        node.reanchor(here, here, 'test')
+    expected = max(before, min(floor, maximum)) if node.pf.adaptive_particles and event != 'local' else before
+    assert node.pf.n == expected
+    assert node.pf.w == pytest.approx(np.full(expected, 1 / expected))
+    assert node.pf.p.shape == (expected, 3)
+    assert node.localized == (event not in ('find', 'initialpose'))

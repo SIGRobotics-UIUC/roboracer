@@ -151,12 +151,21 @@ class MclNode(Node):
 
         self.lmap = LikelihoodMap.from_yaml(os.path.join(track_dir(track), 'map.yaml'),
                                             max_dist=p('max_dist', 2.0).value)
+        self.force_adaptive_resample = p('force_adaptive_resample', False).value
         self.pf = ParticleFilter(
+            adaptive_particles=p('adaptive_particles', True).value,
+            min_particles=p('min_particles', 200).value, max_particles=p('max_particles', 2000).value,
+            pf_err=p('pf_err', 0.05).value, pf_z=p('pf_z', 0.99).value,
+            kld_bin_xy=p('kld_bin_xy', 0.20).value, kld_bin_yaw=p('kld_bin_yaw', 0.10).value,
             n=p('particles', 1000).value, seed=p('seed', -1).value, sigma_hit=p('sigma_hit', 0.15).value,
             z_hit=p('z_hit', 0.8).value, z_rand=p('z_rand', 0.2).value,
             likelihood_scale=p('likelihood_scale', 0.4).value,
             noise_x=tuple(p('noise_x', [0.10, 0.02]).value), noise_y=tuple(p('noise_y', [0.05, 0.05]).value),
             noise_yaw=tuple(p('noise_yaw', [0.05, 0.10]).value))
+        self.recovery_min_particles = p('recovery_min_particles', 1000).value
+        if (not np.isfinite(self.recovery_min_particles) or self.recovery_min_particles < 1
+                or int(self.recovery_min_particles) != self.recovery_min_particles):
+            raise ValueError('recovery_min_particles must be a positive integer')
         self.matcher = ScanMatcher(self.lmap)
         self.hybrid = False
         raceline = os.path.join(track_dir(track), 'raceline.csv')
@@ -242,16 +251,21 @@ class MclNode(Node):
         msg.data = self.lmap.occupancy_grid().tolist()
         pub.publish(msg)
 
-    def init_filter(self, pose, reason, keep_localized=False, quiet=False, matched=False, odom=None):
+    def init_filter(self, pose, reason, keep_localized=False, quiet=False, matched=False, odom=None, recovery=False):
         """Cloud around pose. matched: a scan-matched pose, known to a few cm, so a tighter cloud (a loose one
         never tightens along a featureless straight while the car stands, and the car would wait forever).
         keep_localized: a re-anchor while driving (always matched), the car does not stop for it. odom: the
         odometry pose that pose belongs to (default the newest): a pose matched to a scan belongs to the
         odometry at the scan's stamp, up to the lidar latency older (tagged with the newest, every re-anchor put
-        the filter speed x latency behind the car)."""
+        the filter speed x latency behind the car).
+        recovery: global pose selection or broad /initialpose; raise the adaptive
+        population floor without changing the existing Gaussian widths or state gates.
+        Ordinary local re-anchors deliberately retain the current population.
+        """
         odom = odom if odom is not None else self.odom[0]
         k = 0.3 if keep_localized or matched else 1.0
-        self.pf.init_gaussian(pose, k * self.init_std_xy, k * self.init_std_yaw)
+        self.pf.init_gaussian(pose, k * self.init_std_xy, k * self.init_std_yaw,
+                              min_particles=self.recovery_min_particles if recovery else None)
         if not keep_localized:
             self.localized = False
             self.good = 0
@@ -410,7 +424,7 @@ class MclNode(Node):
             self.pf.predict(delta)
             self.last_odom_pose = odom_pose
         self.pf.update_sensor(ranges, angles, sensor, self.lmap)
-        self.pf.resample()
+        self.pf.resample(force=self.pf.adaptive_particles and self.force_adaptive_resample)
         self.map_T_odom = compose(self.pf.estimate(), inverse(odom_pose))
         self.check_localized(*self.pf.spread())
         if self.localized and self.search is None:
@@ -550,7 +564,7 @@ class MclNode(Node):
             return
         pose, alternatives, how = choice
         self.init_filter(compose(pose, moved), f'{self.search}: found the car in {ms:.0f} ms ({how}'
-                         + (', near the raceline; verifying' if stage == 'raceline' else '') + ')', matched=True)
+                         + (', near the raceline; verifying' if stage == 'raceline' else '') + ')', matched=True, recovery=True)
         if alternatives:
             self.alternatives = Alternatives([compose(a, moved) for a in alternatives], self.odom[0],
                                              evidence=self.validate_evidence, distance=self.validate_distance)
@@ -572,7 +586,7 @@ class MclNode(Node):
             self.get_logger().warning(f'verify: the whole-area search puts the car '
                                       f'{math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m away ({choice[2]}, '
                                       f'{ms:.0f} ms): moving it there')
-            self.init_filter(pose, 'verify', keep_localized=self.localized, quiet=True, matched=True)
+            self.init_filter(pose, 'verify', keep_localized=self.localized, quiet=True, matched=True, recovery=True)
             others = [est] + [compose(a, moved) for a in choice[1]]
         else:
             tied = [h[0] for h in hyps if hyps and h[1] >= self.ambiguity * hyps[0][1]]
@@ -628,7 +642,7 @@ class MclNode(Node):
         self.relocation = None
         self.get_logger().warning(f'relocated {math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m by a global '
                                   f'search, confirmed by the one before ({ms:.0f} ms, {choice[2]})')
-        self.init_filter(pose, 'relocate', keep_localized=True, quiet=True)
+        self.init_filter(pose, 'relocate', keep_localized=True, quiet=True, recovery=True)
 
     def make_unsure(self):
         """After a guess (or a switch, or a verify that found other places): until a whole-area search finds the
@@ -675,7 +689,7 @@ class MclNode(Node):
             self.get_logger().warning(f'the guess was wrong: switching {math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m '
                                       f'to another place that fits clearly better (by {evidence:.1f} fit x updates '
                                       f'over {alt.travelled:.1f} m)')
-            self.init_filter(pose, 'switch', keep_localized=True, quiet=True, odom=odom_pose)
+            self.init_filter(pose, 'switch', keep_localized=True, quiet=True, odom=odom_pose, recovery=True)
             self.alternatives = Alternatives(others, odom_pose, evidence=self.validate_evidence,
                                              distance=self.validate_distance)
             self.make_unsure()
@@ -865,7 +879,7 @@ class MclNode(Node):
         if self.odom is None:
             self.get_logger().warning('/initialpose before /odom: ignored')
             return
-        self.init_filter(pose2d(msg.pose.pose), '/initialpose')
+        self.init_filter(pose2d(msg.pose.pose), '/initialpose', recovery=True)
 
     def tick(self):
         """After a reset: search for the car once it has settled."""

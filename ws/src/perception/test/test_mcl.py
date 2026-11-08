@@ -425,3 +425,133 @@ def test_track_search_candidates_match_the_brute_force_nearest_line_point(lmap):
     near = d.min(axis=1) <= 0.6
     assert m.track_poses == int(near.sum()) * len(m.track_groups[0][1])
     assert sum(len(g[0]) for g in m.track_groups) == int(near.sum())
+
+
+@pytest.mark.parametrize('adaptive', [False, True])
+def test_adaptive_synthetic_lap(lmap, adaptive):
+    pf = ParticleFilter(seed=1, adaptive_particles=adaptive)
+    poses = lap()
+    pf.init_gaussian(poses[0], 0.15, 0.1)
+    errors = [pose_error(t, e) for t, e in drive(pf, lmap, poses, np.random.default_rng(1), odom_bias=1.03)]
+    assert max(e[0] for e in errors) < 0.35
+    assert max(e[1] for e in errors) < 0.15
+    assert np.mean([e[0] for e in errors]) < 0.12
+
+
+def test_kld_population_and_dynamic_methods(lmap):
+    pf = ParticleFilter(n=400, seed=5, adaptive_particles=True)
+    pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    assert not pf.resample()  # ESS preserves population until resampling is needed
+    assert pf.n == 400
+    pf.resample(force=True)
+    assert pf.n == pf.min_particles
+    pf.init_gaussian((1.45, 1.45, 0), 2, 1)
+    pf.resample(force=True)
+    assert pf.n == pf.max_particles
+    assert pf.p.shape == (pf.n, 3)
+    assert len(pf.w) == pf.n
+    assert pf.w.sum() == pytest.approx(1)
+    assert pf.neff() == pytest.approx(pf.n)
+    pf.predict((0.1, 0, 0.02))
+    pf.update_sensor([1.0], [0.0], LASER, lmap)
+    assert np.isfinite(pf.estimate()).all()
+    assert np.isfinite(pf.spread()).all()
+    assert pf.w.sum() == pytest.approx(1)
+    pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    pf.resample(force=True)
+    assert pf.n == pf.min_particles
+
+
+def test_kld_multimodal_and_reproducible():
+    filters = [ParticleFilter(n=400, seed=12, adaptive_particles=True) for _ in range(2)]
+    for pf in filters:
+        pf.p[:, 0] = np.arange(400) % 12
+        pf.resample(force=True)
+        assert pf.n == pf.kld_required(len({pf.pose_bin(p) for p in pf.p}))
+        assert pf.n > pf.min_particles
+    np.testing.assert_array_equal(filters[0].p, filters[1].p)
+    np.testing.assert_array_equal(filters[0].w, filters[1].w)
+
+
+def test_kld_circular_bins_and_formula():
+    pf = ParticleFilter(adaptive_particles=True)
+    assert pf.pose_bin((0, 0, math.pi - 1e-8)) == pf.pose_bin((0, 0, -math.pi + 1e-8))
+    assert pf.pose_bin((0, 0, math.pi)) == pf.pose_bin((0, 0, -math.pi))
+    assert pf.pose_bin((0, 0, 0.3)) == pf.pose_bin((0, 0, 0.3 + 2 * math.pi))
+    assert pf.pose_bin((-0.01, 0, 0))[0] == -1
+    assert pf.kld_z == pytest.approx(2.326347874)
+    assert pf.kld_required(1) == 200
+    assert pf.kld_required(10) == 217
+
+
+@pytest.mark.parametrize('kwargs', [dict(n=0), dict(min_particles=0), dict(max_particles=199),
+    dict(pf_err=0), dict(pf_err=np.nan), dict(pf_z=1), dict(pf_z=0.5),
+    dict(kld_bin_xy=-1), dict(kld_bin_yaw=np.inf), dict(n=1.5)])
+def test_invalid_kld_configuration(kwargs):
+    with pytest.raises(ValueError):
+        ParticleFilter(**kwargs)
+
+
+def test_fixed_resampling_retains_original_systematic_draws():
+    pf = ParticleFilter(n=300, seed=2, adaptive_particles=False)
+    pf.p[:, 0] = np.arange(pf.n)
+    pf.w = np.arange(1, pf.n + 1, dtype=float)
+    pf.w /= pf.w.sum()
+    positions = (np.random.default_rng(2).random() + np.arange(pf.n)) / pf.n
+    expected = pf.p[np.searchsorted(np.cumsum(pf.w), positions)].copy()
+    pf.resample(force=True)
+    np.testing.assert_array_equal(pf.p, expected)
+    assert pf.n == 300
+    assert pf.w == pytest.approx(np.full(300, 1 / 300))
+
+
+@pytest.mark.parametrize('err', [0.05, 1e-320])
+def test_kld_hard_limits_and_invalid_weights(err):
+    pf = ParticleFilter(n=900, adaptive_particles=True, min_particles=30, max_particles=60,
+                        pf_err=err, seed=9)
+    assert pf.n == 60
+    pf.p[:, 0] = np.arange(pf.n)
+    pf.w[:] = np.nan
+    pf.resample(force=True)
+    assert 30 <= pf.n <= 60
+    assert np.isfinite(pf.w).all()
+    assert pf.w.sum() == pytest.approx(1)
+    pf.p[0, 0] = np.nan
+    with pytest.raises(ValueError, match='finite particles'):
+        pf.resample(force=True)
+
+
+def test_kld_draws_are_independent_inverse_cdf_samples():
+    """One-bin support fixes N, exposing the exact independent weighted draw sequence."""
+    pf = ParticleFilter(n=200, seed=17, adaptive_particles=True)
+    pf.p[:, 0] = np.linspace(.001, .19, pf.n)  # unique IDs, all in one pose bin
+    pf.w = np.arange(pf.n, dtype=float)  # includes a zero-probability ancestor
+    pf.w /= pf.w.sum()
+    weights = pf.w / pf.w.max()
+    cumulative = np.cumsum(weights / weights.sum())
+    cumulative[-1] = 1.0
+    indices = np.searchsorted(cumulative, np.random.default_rng(17).random(200), side='right')
+    expected = pf.p[indices].copy()
+    pf.resample(force=True)
+    np.testing.assert_array_equal(pf.p, expected)
+    assert pf.n == 200
+    assert pf.w == pytest.approx(np.full(200, 1 / 200))
+    assert not (pf.p[:, 0] == .001).any()
+
+
+@pytest.mark.parametrize('adaptive', [False, True])
+@pytest.mark.parametrize('floor,expected', [(1000, 1000), (9000, 1500)])
+def test_gaussian_recovery_floor_only_grows_adaptive_population(adaptive, floor, expected):
+    pf = ParticleFilter(n=300, seed=5, adaptive_particles=adaptive, max_particles=1500)
+    pf.init_gaussian((1, 2, 3), 0, 0)
+    pf.resample(force=True)
+    before = pf.n
+    pf.init_gaussian((1, 2, 3), .2, .1)  # ordinary re-anchor retains the population
+    assert pf.n == before
+    pf.init_gaussian((1, 2, 3), .2, .1, min_particles=floor)
+    assert pf.n == (expected if adaptive else 300)
+    assert pf.p.shape == (pf.n, 3)
+    assert pf.w == pytest.approx(np.full(pf.n, 1 / pf.n))
+    assert np.isfinite(pf.p).all()
+    pf.init_gaussian((1, 2, 3), .2, .1, min_particles=200)
+    assert pf.n == (expected if adaptive else 300)  # a floor must never shrink a larger cloud

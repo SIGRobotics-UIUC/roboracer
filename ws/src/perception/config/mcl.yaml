@@ -2,6 +2,15 @@
 mcl:
   ros__parameters:
     # particles: set by the launch argument particles:= (default 1000; ~2000 is fine for numpy at 40 Hz scans)
+    adaptive_particles: true  # experimental KLD mode; false retains fixed systematic MCL
+    min_particles: 200
+    max_particles: 2000
+    recovery_min_particles: 1000  # adaptive global recovery floor, capped at max_particles; not local re-anchors
+    pf_err: 0.05               # KLD approximation error
+    pf_z: 0.99                 # confidence probability, converted to a normal quantile
+    kld_bin_xy: 0.20           # m
+    kld_bin_yaw: 0.10          # rad; circular equal-width bins
+    force_adaptive_resample: false  # benchmark only: bypass ESS trigger in adaptive mode
     beams: 60                  # lidar beams used per update, evenly spaced
     sigma_hit: 0.15            # m, std of a wall hit in the likelihood field (map resolution + lidar noise)
     z_hit: 0.8                 # weight of "the endpoint is on a wall"
