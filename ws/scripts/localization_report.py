@@ -2,7 +2,7 @@
 """HTML report of localization benchmark results (scripts/localization_benchmark.py), one page, no dependencies.
 
     python3 scripts/localization_report.py log/localization_benchmark/<a>/ log/localization_benchmark/<b>/ ...
-        [-o log/localization_benchmark/report.html] [--title TITLE]
+        [-o log/localization_benchmark/report.html] [--title TITLE] [--metrics err_mean,err_p95,...]
 
 A folder may name its series: <folder>:cartographer=Carto before,mcl=MCL (runs of one localizer from several
 folders under one name are one series; e.g. to compare versions of the code). Default names: Cartographer,
@@ -11,7 +11,8 @@ slots).
 
 Groups the runs by speed_scale (from each folder's meta.json) and localizer, and draws one small chart per
 metric (x = speed scale, one line per localizer through the mean of its runs, a dot per run), plus a table of
-every run. Open the file in a browser.
+every run. Open the file in a browser. --metrics picks the charts and their order (default: all; err_p95 is
+only charted when asked for).
 """
 import argparse
 import html
@@ -21,6 +22,7 @@ from pathlib import Path
 METRICS = [   # key, title, unit, scale, what it means
     ('err_mean', 'Mean position error', 'cm', 100, 'average distance between the estimate and the true pose'),
     ('err_max', 'Worst position error', 'cm', 100, 'the single largest error in the run'),
+    ('err_p95', 'Position error, 95th percentile', 'cm', 100, '95 % of the time the estimate was closer than this'),
     ('head_p95', 'Heading error, 95th percentile', 'deg', 1, '95 % of the time the heading was off by less'),
     ('jitter', 'Pose jitter', 'mm', 1000,
      'how much the estimate wobbles over 50 ms: what pure pursuit steers on'),
@@ -91,8 +93,18 @@ def main(argv=None):
     ap.add_argument('-o', '--output', default='log/localization_benchmark/report.html')
     ap.add_argument('--title', default='Localization benchmark: Cartographer vs our MCL')
     ap.add_argument('--order', help='series names in the order to show them, comma-separated')
+    ap.add_argument('--metrics', help='charts to draw, in order, comma-separated keys: '
+                    + ', '.join(m[0] for m in METRICS))
     args = ap.parse_args(argv)
     runs, series = load(args.dirs)
+    by_key = {m[0]: m for m in METRICS}
+    if args.metrics:
+        unknown = [k for k in args.metrics.split(',') if k not in by_key]
+        if unknown:
+            raise SystemExit(f'--metrics: unknown {", ".join(unknown)}; choose from {", ".join(by_key)}')
+        metrics = [by_key[k] for k in args.metrics.split(',')]
+    else:
+        metrics = [m for m in METRICS if m[0] != 'err_p95']
     if args.order:
         order = args.order.split(',')
         series = sorted(series, key=lambda n: order.index(n) if n in order else len(order))
@@ -105,7 +117,7 @@ def main(argv=None):
            f'{", ".join(str(s) for s in speeds)} (fraction of the planned raceline speed). '
            'Ground truth from the simulator is used only for scoring.')
     page = (PAGE.replace('__SUB__', html.escape(sub)).replace('__RUNS__', json.dumps(runs))
-            .replace('__METRICS__', json.dumps(METRICS)).replace('__TABLE__', json.dumps(TABLE))
+            .replace('__METRICS__', json.dumps(metrics)).replace('__TABLE__', json.dumps(TABLE))
             .replace('__FINDINGS__', json.dumps(findings(runs, series))).replace('__SERIES__', json.dumps(series))
             .replace('__TITLE__', html.escape(args.title)))
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

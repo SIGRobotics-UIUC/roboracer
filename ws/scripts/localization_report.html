@@ -149,9 +149,10 @@ const rows = [...RUNS].sort((a, b) => a.speed - b.speed || LOCS.indexOf(a.locali
   a.folder.localeCompare(b.folder) || a.name.localeCompare(b.name));
 const session = r => /-(\d\d)(\d\d)/.test(r.folder) ? ' <span style="color:var(--muted)">' +
   r.folder.replace(/.*-(\d\d)(\d\d)\d\d$/, '$1:$2') + ' UTC</span>' : '';
-document.getElementById('table').innerHTML = '<tr><th>run</th><th>speed</th>' + TABLE.map(k => `<th>${COLS[k]}</th>`).join('') + '</tr>' +
+const COLS_SHOWN = TABLE.filter(k => RUNS.some(r => r[k] !== undefined));   // older runs lack newer scores
+document.getElementById('table').innerHTML = '<tr><th>run</th><th>speed</th>' + COLS_SHOWN.map(k => `<th>${COLS[k]}</th>`).join('') + '</tr>' +
   rows.map(r => `<tr><td><i class="dot-key" style="background:${COLOR(r.localizer)}"></i>${name(r.localizer)} ${r.name.split('_').pop()}${session(r)}</td>` +
-    `<td>${r.speed}</td>` + TABLE.map(k => `<td>${cell(k, r[k])}</td>`).join('') + '</tr>').join('');
+    `<td>${r.speed}</td>` + COLS_SHOWN.map(k => `<td>${cell(k, r[k])}</td>`).join('') + '</tr>').join('');
 
 document.getElementById('findings').innerHTML = __FINDINGS__.map(f =>
   `<div class="finding"><div class="label">${f[0]}</div><div class="value">${f[1]}</div><div class="note">${f[2]}</div></div>`).join('');
