@@ -30,6 +30,7 @@ setup(
             'follow_the_gap_node = control.follow_the_gap_node:main',
             'disparity_gap_node = control.disparity_gap_node:main',
             'wall_follow_node = control.wall_follow_node:main',
+            'slip_monitor_node = control.slip_monitor_node:main',
         ],
     },
 )

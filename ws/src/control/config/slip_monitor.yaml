@@ -1,0 +1,22 @@
+slip_monitor:
+  ros__parameters:
+    pose_topic: /localized_pose
+    command_topic: /drive
+    imu_topic: /sensors/imu/raw
+    # Initial, deliberately conservative values. The paper calibrates each as
+    # mean + 2 standard deviations on representative no-slip bags.
+    linear_threshold: 0.75       # m/s, |expected speed - localized speed|
+    angular_threshold: 0.75      # rad/s, |v/L tan(steering) - localized yaw rate|
+    pose_smoothing: 0.35         # new-sample weight for differentiated pose motion
+    residual_smoothing: 0.35     # new-sample weight for the two residuals
+    trigger_samples: 2
+    clear_samples: 3
+    min_motion_speed: 0.2        # below this there is not enough excitation; /slip/valid is false
+    max_command_age: 0.5
+    max_imu_age: 0.2
+    max_pose_age: 0.5
+    # Mirrors the simulator adapter's command ramp. Override these for the car
+    # if its low-level speed controller uses different limits.
+    max_acceleration: 2.5
+    max_deceleration: 6.9
+    reset_mu_on_sim_reset: true

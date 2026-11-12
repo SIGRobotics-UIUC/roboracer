@@ -3,7 +3,7 @@
     ros2 launch control race.launch.py track:=<name> [speed_scale:=0.5] [max_speed:=0.0] [pose_topic:=/localized_pose]
         [controller:=pure_pursuit|map] [avoid:=false] [localizer:=cartographer|mcl]
         [adaptive_lookahead:=true] [adaptive_lookahead_cut:=0.1]
-        [adaptive_lookahead_min_time:=0.25]
+        [adaptive_lookahead_min_time:=0.25] [slip_monitor:=false]
 
 Needs tracks/<name>/map.pbstream (map.yaml for localizer:=mcl) and raceline.csv (ws/scripts/map_track.sh
 <name>), and the car at the pose mapping started from (ws/scripts/race.sh resets the sim car there).
@@ -79,8 +79,17 @@ def generate_launch_description():
                               description='with adaptive_lookahead: corner cut [m], lookahead <= sqrt(2 cut / kappa)'),
         DeclareLaunchArgument('adaptive_lookahead_min_time', default_value='0.25',
                               description='with adaptive_lookahead: but lookahead >= min_time x speed [s]'),
+        DeclareLaunchArgument('slip_monitor', default_value='false',
+                              description='start the diagnostic command-versus-localization slip monitor'),
+        DeclareLaunchArgument('slip_linear_threshold', default_value='0.75',
+                              description='slip monitor forward-speed residual threshold [m/s]'),
+        DeclareLaunchArgument('slip_angular_threshold', default_value='0.75',
+                              description='slip monitor yaw-rate residual threshold [rad/s]'),
         include('perception', 'localization.launch.py', ['track'], UnlessCondition(use_mcl)),
         include('perception', 'mcl.launch.py', ['track'], IfCondition(use_mcl)),
         OpaqueFunction(function=lambda context: controller_launch(context, include)),
         OpaqueFunction(function=obstacle_spliner),
+        include('control', 'slip_monitor.launch.py',
+                ['pose_topic', 'slip_linear_threshold', 'slip_angular_threshold'],
+                IfCondition(LaunchConfiguration('slip_monitor'))),
     ])
