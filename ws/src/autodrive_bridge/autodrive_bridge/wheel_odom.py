@@ -16,6 +16,9 @@ vesc_to_odom publishes /odom from the VESC instead and this node is not launched
 Subscribed (vehicle_ns = /autodrive/roboracer_1):
   left_encoder, right_encoder (JointState, cumulative wheel angle in rad), steering (Float32, rad),
   imu (Imu)
+
+Benchmark only: the slip_* parameters (all zero = off, the default) simulate wheel slip on the published
+odometry (odom_degrade.py), so localizers can be scored on imperfect odometry. Never set them for racing.
 """
 import math
 from collections import deque
@@ -29,8 +32,10 @@ from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32
+from rcl_interfaces.msg import SetParametersResult
 from tf2_ros import TransformBroadcaster
 
+from autodrive_bridge.odom_degrade import PARAMS, OdomDegrader
 from autodrive_bridge.single_instance import DuplicateGuard, exit_with_parent, topic_publishers
 
 
@@ -61,6 +66,15 @@ class WheelOdom(Node):
         # s; longest gap the gyro is integrated over, per the sim's TimeManager maximum delta time (a
         # sim hitch moves physics at most this far per frame while the wall clock runs on)
         self.max_gyro_dt = p('max_gyro_dt', 0.1).value
+        # Benchmark only (localization_benchmark.py --slip): simulated wheel slip, see odom_degrade.py. All
+        # zero = off. Settable at runtime; every set (also of slip_seed) restarts the slip noise from the seed.
+        for name in PARAMS:
+            p('slip_' + name, 0.5 if name == 'tau' else 0.0)
+        p('slip_seed', 0)
+        self.slip = self.make_degrader({})
+        self.slip_text = 'simulated wheel slip off'
+        self.slip_log_timer = None
+        self.add_on_set_parameters_callback(self.on_set_parameters)
 
         # AutoDRIVE's bridge publishes RELIABLE / depth 1; match it.
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -88,6 +102,41 @@ class WheelOdom(Node):
         self.gyro_z = None
         self.gyro_t = None
         self.x = self.y = self.yaw = 0.0
+
+    def make_degrader(self, changed):
+        """OdomDegrader from the slip_* parameters, with `changed` ({name: value}) taking precedence."""
+        def value(name):
+            return float(changed[name]) if name in changed else self.get_parameter(name).value
+        return OdomDegrader(**{n: value('slip_' + n) for n in PARAMS}, seed=int(value('slip_seed')))
+
+    def on_set_parameters(self, params):
+        changed = {q.name: q.value for q in params if q.name.startswith('slip_')}
+        if not changed:
+            return SetParametersResult(successful=True)
+        try:   # never let a bad value take the odometry down
+            slip = self.make_degrader(changed)
+        except Exception as e:  # noqa: BLE001
+            return SetParametersResult(successful=False, reason=str(e))
+        self.slip = slip
+        # rclpy applies a multi-parameter set one parameter at a time: log the result once it settles
+        if self.slip_log_timer is not None:
+            self.destroy_timer(self.slip_log_timer)
+        self.slip_log_timer = self.create_timer(0.2, self.log_slip)
+        return SetParametersResult(successful=True)
+
+    def log_slip(self):
+        self.destroy_timer(self.slip_log_timer)
+        self.slip_log_timer = None
+        slip = self.slip
+        text = ('simulated wheel slip ON (benchmark): ' + ', '.join(f'{n}={getattr(slip, n):g}' for n in PARAMS)
+                if slip.active else 'simulated wheel slip off')
+        if text == self.slip_text:
+            return
+        self.slip_text = text
+        if slip.active:   # one call site per severity: rclpy refuses a call site that logs at two
+            self.get_logger().warn(text)
+        else:
+            self.get_logger().info(text)
 
     def steering_cb(self, msg):
         self.steer = float(msg.data)
@@ -140,8 +189,11 @@ class WheelOdom(Node):
         ds = 0.5 * ((sample[1] - last[1]) + (sample[2] - last[2])) * self.wheel_radius
         curvature = math.tan(self.steer) / self.wheelbase
         dyaw = self.gyro_z * min(t - last[0], self.max_gyro_dt) if gyro else ds * curvature
-        self.x += ds * math.cos(self.yaw + 0.5 * dyaw)
-        self.y += ds * math.sin(self.yaw + 0.5 * dyaw)
+        slipping = self.slip.active
+        ds, side, dyaw = self.slip.step(ds, dyaw, t - last[0])
+        heading = self.yaw + 0.5 * dyaw
+        self.x += ds * math.cos(heading) - side * math.sin(heading)
+        self.y += ds * math.sin(heading) + side * math.cos(heading)
         self.yaw += dyaw
         self.dist += ds
 
@@ -150,7 +202,10 @@ class WheelOdom(Node):
             self.history.popleft()
         t0, d0 = self.history[0]
         speed = (self.dist - d0) / (t - t0) if t > t0 else 0.0
-        yaw_rate = self.gyro_z if gyro else speed * curvature
+        if slipping:
+            yaw_rate = dyaw / (t - last[0])
+        else:
+            yaw_rate = self.gyro_z if gyro else speed * curvature
         qz, qw = math.sin(self.yaw / 2.0), math.cos(self.yaw / 2.0)
 
         if not self.guard.ok:

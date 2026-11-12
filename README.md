@@ -147,14 +147,24 @@ Never run it with `localization.launch.py`: both publish `map -> odom`.
 ### Localization benchmark
 
 `scripts/localization_benchmark.py` races each localizer on a mapped track (the normal `race.sh`), alternating
-them, and scores `/localized_pose` against the sim's ground truth: mean / p95 / worst error, heading error, pose
-jitter (how much the estimate wobbles over 50 ms), pose jumps, sim stalls, laps and crashes.
+them, and scores `/localized_pose` against the sim's ground truth: mean / p95 / worst error, the error split
+into sideways (across the car's heading: what puts it into a wall) and along-track (ahead / behind), heading
+error, pose jitter (how much the estimate wobbles over 50 ms), pose jumps, sim stalls, laps and crashes, and how
+far `/odom` drifted from the true motion (odom drift, % per metre).
 `scripts/localization_report.py` turns result folders into one HTML page of charts.
 
 ```bash
 python3 scripts/localization_benchmark.py run --track porto --repeats 3 --speed-scale 0.7    # in the container
+python3 scripts/localization_benchmark.py run --track porto --localizers mcl --slip strong   # slippery odometry
 python3 scripts/localization_report.py log/localization_benchmark/<folder> ... -o report.html
 ```
+
+`--slip mild|strong` (or `scale_bias=..,scale_std=..,yaw_bias=..,yaw_std=..,lateral=..,tau=..`) simulates wheel
+slip on the odometry both localizers use, through `wheel_odom`'s `slip_*` parameters
+(`autodrive_bridge/odom_degrade.py`): wheelspin and lock-up (distance read too long or short), a yaw rate that
+over- or under-reads in corners, and the sideways slide wheel odometry never sees. The benchmark sets it before each
+race (the same noise for every localizer's repeat n) and switches it off after; all zero, the default, is off.
+Even without slip the sim's `/odom` drifts about 5-6 % (mostly heading); `mild` takes it to ~8 %, `strong` to ~16 %.
 
 Results on Porto (2026-11-08): [docs/reports/localization_benchmark_20261108](docs/reports/localization_benchmark_20261108/README.md).
 

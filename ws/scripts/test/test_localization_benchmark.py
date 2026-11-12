@@ -117,6 +117,47 @@ class ScoringTests(unittest.TestCase):
         self.assertIn('cartographer_1', text)
         self.assertEqual(len(text.splitlines()), 3)
 
+    def test_lateral_and_longitudinal_split_follows_the_heading(self):
+        t, p = circle()
+        # estimate 0.1 m ahead along the heading and 0.05 m to the left of the car
+        h = p[:, 2]
+        est = p.copy()
+        est[:, 0] += 0.1 * np.cos(h) - 0.05 * np.sin(h)
+        est[:, 1] += 0.1 * np.sin(h) + 0.05 * np.cos(h)
+        lat, lon = b.lateral_longitudinal(est, p)
+        np.testing.assert_allclose(lat, 0.05, atol=1e-9)
+        np.testing.assert_allclose(lon, 0.1, atol=1e-9)
+        s = b.score(rows(t, est, t, to_world(p)), ORIGIN)
+        self.assertAlmostEqual(s['lat_p95'], 0.05, places=3)
+        self.assertAlmostEqual(s['lon_bias'], 0.1, places=3)
+
+    def test_odom_drift_zero_for_exact_odometry_and_matches_a_scale_error(self):
+        t, p = circle()
+        # odometry in its own frame (rotated, shifted): exact motion scores 0
+        q = p.copy()
+        q[:, :2] = p[:, :2] @ np.array([[0.0, -1.0], [1.0, 0.0]]).T + [5.0, -2.0]
+        q[:, 2] = b.wrap(p[:, 2] + math.pi / 2)
+        self.assertAlmostEqual(b.odom_drift(t, q, t, p), 0.0, places=6)
+        # 10 % too much distance: 10 % drift
+        long = p.copy()
+        long[:, :2] *= 1.1
+        self.assertAlmostEqual(b.odom_drift(t, long, t, p), 0.1, places=2)
+        odom = [{'kind': 'odom', 'stamp': s, 'recv': s, 'a': x, 'b': y, 'c': h} for s, (x, y, h) in zip(t, long)]
+        self.assertAlmostEqual(b.score(rows(t, p, t, to_world(p), odom), ORIGIN)['odom_drift'], 0.1, places=2)
+
+    def test_odom_drift_skips_windows_across_a_reset(self):
+        t, p = circle()
+        gt = p.copy()
+        gt[500:, :2] += [3.0, 0.0]          # the car is put back 3 m away; the odometry keeps going
+        self.assertAlmostEqual(b.odom_drift(t, p, t, gt), 0.0, places=6)
+
+    def test_slip_option(self):
+        self.assertEqual(b.parse_slip('none'), {})
+        self.assertEqual(b.parse_slip('mild'), b.SLIP_PRESETS['mild'])
+        self.assertEqual(b.parse_slip('scale_bias=0.1,lateral=0.02'), {'scale_bias': 0.1, 'lateral': 0.02})
+        with self.assertRaises(Exception):
+            b.parse_slip('grip=0.5')
+
 
 if __name__ == '__main__':
     unittest.main()

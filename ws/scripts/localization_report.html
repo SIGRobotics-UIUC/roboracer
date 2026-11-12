@@ -138,10 +138,12 @@ for (const [key, title, unit, scale, what] of METRICS) {
 
 const COLS = {err_mean: 'mean err (m)', err_median: 'median (m)', err_p95: 'p95 (m)', err_max: 'max (m)',
   far_share: '> 0.2 m', head_mean: 'heading mean (°)', head_p95: 'heading p95 (°)', aligned_mean: 'aligned (m)',
-  jitter: 'jitter (m)',
+  lat_mean: 'sideways mean (m)', lat_p95: 'sideways p95 (m)', lon_p95: 'along p95 (m)', lon_bias: 'along bias (m)',
+  odom_drift: 'odom drift', jitter: 'jitter (m)',
   jumps: 'jumps', max_jump: 'max jump (m)', gap_s: 'no pose (s)', stalls: 'sim stalls', laps: 'laps',
   collisions: 'crashes', scan_hz: 'scan Hz'};
-const cell = (k, v) => v === undefined ? '–' : k === 'far_share' ? (v * 100).toFixed(1) + '%' :
+const cell = (k, v) => v === undefined ? '–' : ['far_share', 'odom_drift'].includes(k) ? (v * 100).toFixed(1) + '%' :
+  k === 'lon_bias' ? (v >= 0 ? '+' : '') + v.toFixed(3) :
   Number.isInteger(v) ? v : ['head_mean', 'head_p95', 'gap_s', 'max_jump', 'err_max', 'scan_hz'].includes(k) ? v.toFixed(k === 'scan_hz' ? 0 : 2) : v.toFixed(3);
 const rows = [...RUNS].sort((a, b) => a.speed - b.speed || LOCS.indexOf(a.localizer) - LOCS.indexOf(b.localizer) ||
   a.folder.localeCompare(b.folder) || a.name.localeCompare(b.name));

@@ -24,11 +24,17 @@ METRICS = [   # key, title, unit, scale, what it means
     ('head_p95', 'Heading error, 95th percentile', 'deg', 1, '95 % of the time the heading was off by less'),
     ('jitter', 'Pose jitter', 'mm', 1000,
      'how much the estimate wobbles over 50 ms: what pure pursuit steers on'),
+    ('lat_p95', 'Sideways error, 95th percentile', 'cm', 100,
+     'error across the car\'s heading: what puts the car into a wall'),
+    ('lon_p95', 'Along-track error, 95th percentile', 'cm', 100, 'error along the heading: ahead of or behind the car'),
     ('jumps', 'Pose jumps per run', '', 1, 'steps of the estimate faster than 15 m/s (snaps)'),
-    ('collisions', 'Crashes per run', '', 1, 'the sim\'s collision count over the 60 s'),
+    ('collisions', 'Crashes per run', '', 1, 'the sim\'s collision count over the run'),
+    ('odom_drift', 'Odometry drift', '%', 100,
+     'how far /odom strays from the true motion per metre driven: the input both localizers share'),
 ]
 TABLE = ['err_mean', 'err_median', 'err_p95', 'err_max', 'far_share', 'head_mean', 'head_p95', 'aligned_mean',
-         'jitter', 'jumps', 'max_jump', 'gap_s', 'stalls', 'laps', 'collisions', 'scan_hz']
+         'lat_mean', 'lat_p95', 'lon_p95', 'lon_bias', 'jitter', 'jumps', 'max_jump', 'gap_s', 'stalls', 'laps',
+         'collisions', 'odom_drift', 'scan_hz']
 
 
 DEFAULT_NAMES = {'cartographer': 'Cartographer', 'mcl': 'MCL (ours)'}
