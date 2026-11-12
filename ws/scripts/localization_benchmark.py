@@ -2,7 +2,7 @@
 """Localization benchmark: race each localizer on a mapped track and score its pose against the sim's ground truth.
 
     python3 scripts/localization_benchmark.py run --track porto [--localizers cartographer,mcl] [--duration 60]
-        [--speed-scale 0.5] [--repeats 1] [--controller pure_pursuit]
+        [--speed-scale 0.5] [--repeats 1] [--controller pure_pursuit] [--slip none|mild|strong|k=v,...]
     python3 scripts/localization_benchmark.py analyze log/localization_benchmark/<time>/   (re-score saved runs)
 
 Run inside the container (sourced workspace), with the bridge running and the simulator connected in
@@ -10,14 +10,22 @@ Autonomous mode on the same track (this script cannot switch the sim's track). E
 `scripts/race.sh <track> localizer:=<name>` for --duration s, stopped with one SIGINT to the launch.
 
 Recorded per run (log/localization_benchmark/<UTC time>/<localizer>_<n>.csv): /localized_pose,
-/ground_truth/pose (sim world frame, rear axle = base_link), the sim's lap and collision counts, and /scan
-arrival times (the sim's sensor rate: a slow sim degrades every localizer).
+/ground_truth/pose (sim world frame, rear axle = base_link), /odom, the sim's lap and collision counts, and
+/scan arrival times (the sim's sensor rate: a slow sim degrades every localizer).
+
+--slip simulates wheel slip on the odometry both localizers use (wheel_odom's slip_* parameters, see
+autodrive_bridge/odom_degrade.py): a preset (mild, strong) or scale_bias=..,scale_std=..,yaw_bias=..,
+yaw_std=..,lateral=..,tau=.. . Repeat n of every localizer gets the same slip noise (seed n). The slip is set
+just before each race and switched off after it (also on Ctrl-C), and stored in meta.json.
 
 Scores per run (summary.txt, summary.json):
   error     the localized pose against ground truth, put in the map frame with tracks/<track>/map_to_world.yaml
             (the car's true pose when mapping started) and interpolated to each localized pose's stamp (also
             across a sim stall, where the car stood still: a localizer extrapolating meanwhile is scored):
             position mean / median / p95 / max [m], heading mean / p95 [deg], share of time over 0.2 m
+  lateral   the error across the car's true heading (sideways: what puts the car into a wall), mean / p95 [m]
+  longitudinal  the error along it (ahead / behind), mean / p95 [m], and its signed mean lon_bias
+            (+ = the estimate runs ahead of the car, - = it lags)
   aligned   position error after the best rigid fit of the run's localized track onto the true one: what is
             left once a rotated or shifted map is taken out (error - aligned ~ the map's own placement error)
   jitter    RMS change of the error over 50 ms [m]: how much the estimate wobbles around the truth, what
@@ -27,6 +35,8 @@ Scores per run (summary.txt, summary.json):
             Cartographer's pose extrapolation running on while the sim stalls, then snapping back)
   stalls    gaps over 0.1 s between the sim's ground-truth frames: the sim froze (a loaded Mac)
   gaps      the pose missing over 0.25 s while it had been published (e.g. withheld after a crash), total s
+  odom_drift  how far /odom's motion over each 1 s differs from the true motion, per metre driven [%]:
+            how good the odometry was (about 0 in the sim without --slip)
   laps, collisions, scan_hz
 
 Ground truth is only used here, for scoring; the localizers never see it.
@@ -53,6 +63,13 @@ STILL, MAX_STILL_DT = 0.1, 2.0         # m, s: ... or a longer gap (a sim stall)
 TELEPORT = 0.5                         # m between two ground-truth poses: a reset, never interpolated across
 FAR = 0.2                              # m: "share of time over"
 JITTER_DT = 0.05                       # s: the error's change over this long is the jitter
+ODOM_WINDOW = 1.0                      # s: odometry drift is measured over windows this long
+SLIP_PRESETS = {   # wheel_odom slip_* parameters (odom_degrade.py); tau 0.5 s for all
+    'none': {},
+    'mild': {'scale_bias': 0.03, 'scale_std': 0.05, 'yaw_std': 0.05, 'lateral': 0.01},
+    'strong': {'scale_bias': 0.08, 'scale_std': 0.15, 'yaw_bias': 0.05, 'yaw_std': 0.10, 'lateral': 0.03},
+}
+SLIP_KEYS = ('scale_bias', 'scale_std', 'yaw_bias', 'yaw_std', 'lateral', 'tau')
 
 
 def wrap(a):
@@ -126,6 +143,43 @@ def jitter(t, err, ok):
     return float(np.sqrt((d ** 2).mean()))
 
 
+def lateral_longitudinal(est, truth):
+    """(lateral, longitudinal) error of est (N x 2) against truth (N x 3, x y yaw): across and along the true
+    heading. Longitudinal + = the estimate is ahead of the car; lateral + = to its left."""
+    d = np.asarray(est)[:, :2] - np.asarray(truth)[:, :2]
+    c, s = np.cos(truth[:, 2]), np.sin(truth[:, 2])
+    return -s * d[:, 0] + c * d[:, 1], c * d[:, 0] + s * d[:, 1]
+
+
+def odom_drift(odom_t, odom, gt_t, gt):
+    """Odometry error per metre driven (fraction): over windows of ODOM_WINDOW s, the odometry's motion and
+    the true motion, each in its own start frame, compared. None without enough data."""
+    odom_t, odom = np.asarray(odom_t), np.asarray(odom).reshape(-1, 3)
+    if len(odom_t) < 3:
+        return None
+    truth, ok = interpolate(gt_t, gt, odom_t)
+    j = np.searchsorted(odom_t, odom_t + ODOM_WINDOW)
+    v = ok & (j < len(odom_t))
+    v[v] &= ok[j[v]] & (odom_t[j[v]] - odom_t[v] < 1.2 * ODOM_WINDOW)
+    i, j = np.nonzero(v)[0], j[v]
+
+    def local(p):   # motion from i to j, in the frame at i
+        d = p[j, :2] - p[i, :2]
+        c, s = np.cos(p[i, 2]), np.sin(p[i, 2])
+        return np.column_stack([c * d[:, 0] + s * d[:, 1], -s * d[:, 0] + c * d[:, 1]])
+    if not len(i):
+        return None
+    true_move = local(truth)
+    dist = np.hypot(*true_move.T)
+    gt_t, gt = np.asarray(gt_t), np.asarray(gt)
+    resets = gt_t[1:][np.hypot(*np.diff(gt[:, :2], axis=0).T) > TELEPORT]
+    keep = np.searchsorted(resets, odom_t[i], 'right') == np.searchsorted(resets, odom_t[j], 'right')   # none inside
+    if dist[keep].sum() < 1.0:
+        return None
+    err = np.hypot(*(local(odom) - true_move).T)
+    return float(err[keep].sum() / dist[keep].sum())
+
+
 def counter_delta(values):
     """Increase of a sim counter over a run, ignoring drops (a sim reset zeroes some counters)."""
     v = np.asarray(values, dtype=float)
@@ -154,9 +208,18 @@ def score(rows, origin):
                    head_mean=float(eh.mean()), head_p95=float(np.percentile(eh, 95)),
                    aligned_mean=float(ea.mean()), aligned_p95=float(np.percentile(ea, 95)),
                    fit_rot_deg=float(np.degrees(math.atan2(r[1, 0], r[0, 0]))), fit_shift=float(np.hypot(*tr)))
+        lat, lon = lateral_longitudinal(lp[ok], truth[ok])
+        out.update(lat_mean=float(np.abs(lat).mean()), lat_p95=float(np.percentile(np.abs(lat), 95)),
+                   lon_mean=float(np.abs(lon).mean()), lon_p95=float(np.percentile(np.abs(lon), 95)),
+                   lon_bias=float(lon.mean()))
         jit = jitter(lt, lp[:, :2] - truth[:, :2], ok)
         if jit is not None:
             out['jitter'] = jit
+    od = sorted(by.get('odom', []), key=lambda r: r['stamp'])
+    drift = odom_drift([r['stamp'] for r in od], [[r['a'], r['b'], r['c']] for r in od],
+                       [r['stamp'] for r in gt], gp)
+    if drift is not None:
+        out['odom_drift'] = drift
     jumps, gaps = jumps_and_gaps(lt, lp[:, :2])
     scans = sorted(r['recv'] for r in by.get('scan', []))
     gdt = np.diff([r['stamp'] for r in gt]) if len(gt) > 1 else np.zeros(0)
@@ -194,7 +257,8 @@ def read_origin(track_dir):
 
 COLUMNS = [('run', '{}'), ('err_mean', '{:.3f}'), ('err_median', '{:.3f}'), ('err_p95', '{:.3f}'),
            ('err_max', '{:.2f}'), ('far_share', '{:.1%}'), ('head_mean', '{:.2f}'), ('head_p95', '{:.2f}'),
-           ('aligned_mean', '{:.3f}'), ('jitter', '{:.3f}'), ('jumps', '{}'), ('max_jump', '{:.2f}'),
+           ('aligned_mean', '{:.3f}'), ('lat_mean', '{:.3f}'), ('lat_p95', '{:.3f}'), ('lon_mean', '{:.3f}'),
+           ('lon_p95', '{:.3f}'), ('lon_bias', '{:+.3f}'), ('jitter', '{:.3f}'), ('odom_drift', '{:.1%}'), ('jumps', '{}'), ('max_jump', '{:.2f}'),
            ('gap_s', '{:.1f}'), ('stalls', '{}'), ('laps', '{}'), ('collisions', '{}'), ('scan_hz', '{:.0f}')]
 
 
@@ -213,8 +277,10 @@ def analyze(out_dir):
     meta = json.loads((out_dir / 'meta.json').read_text())
     origin = tuple(meta['origin'])
     results = [(p.stem, score(read_rows(p), origin)) for p in sorted(out_dir.glob('*.csv'))]
+    slip = meta.get('slip') or {}
     text = (f"Localization benchmark: track {meta['track']}, speed_scale {meta['speed_scale']}, "
-            f"{meta['duration']} s per run, controller {meta['controller']}\n"
+            f"{meta['duration']} s per run, controller {meta['controller']}, wheel slip "
+            + (', '.join(f'{k}={v:g}' for k, v in slip.items()) if slip else 'none') + "\n"
             'errors in m (heading in deg) against sim ground truth in the map frame; aligned = after the best rigid '
             'fit (map placement removed)\n\n' + table(results) + '\n')
     (out_dir / 'summary.txt').write_text(text)
@@ -225,9 +291,53 @@ def analyze(out_dir):
 
 # ----------------------------------------------------------------------------------------------- recording
 
-def record_run(track, localizer, args, path):
+def parse_slip(text):
+    """--slip value -> {key: value} (empty = no slip)."""
+    if text in SLIP_PRESETS:
+        return dict(SLIP_PRESETS[text])
+    out = {}
+    for kv in text.split(','):
+        k, _, v = kv.partition('=')
+        if k not in SLIP_KEYS or not v:
+            raise argparse.ArgumentTypeError(f'--slip: {kv!r}; a preset ({", ".join(SLIP_PRESETS)}) or '
+                                             f'k=v with k in {", ".join(SLIP_KEYS)}')
+        out[k] = float(v)
+    return out
+
+
+def set_slip(node, slip, seed, timeout=5.0, switch_off=False):
+    """Set wheel_odom's slip_* parameters (unnamed ones 0, tau 0.5). Exits if slip is wanted and that fails."""
+    import rclpy
+    from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+    from rcl_interfaces.srv import SetParameters
+    values = {k: slip.get(k, 0.5 if k == 'tau' else 0.0) for k in SLIP_KEYS}
+    params = [Parameter(name='slip_' + k, value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=v))
+              for k, v in values.items()]
+    params.append(Parameter(name='slip_seed', value=ParameterValue(type=ParameterType.PARAMETER_INTEGER,
+                                                                   integer_value=int(seed))))
+    client = node.create_client(SetParameters, '/wheel_odom/set_parameters')
+    try:
+        ok = client.wait_for_service(timeout_sec=timeout)
+        if ok:
+            fut = client.call_async(SetParameters.Request(parameters=params))
+            rclpy.spin_until_future_complete(node, fut, timeout_sec=timeout)
+            ok = fut.done() and fut.result() is not None and all(r.successful for r in fut.result().results)
+    finally:
+        node.destroy_client(client)
+    if not ok:
+        if slip:
+            sys.exit('could not set wheel slip on /wheel_odom (bridge running? restarted since slip_* was added?)')
+        if switch_off:
+            sys.exit('ERROR: could not switch the simulated wheel slip off: /odom may still be degraded. Restart '
+                     'the bridge (ros2 launch autodrive_bridge autodrive_launch.py) before racing.')
+        print('  WARNING: could not make sure wheel slip is off on /wheel_odom (a bridge without slip_* '
+              'parameters?)', file=sys.stderr)
+
+
+def record_run(track, localizer, args, path, seed=0):
     import rclpy
     from geometry_msgs.msg import PoseStamped
+    from nav_msgs.msg import Odometry
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import Int32
     from rclpy.qos import qos_profile_sensor_data
@@ -235,11 +345,12 @@ def record_run(track, localizer, args, path):
     rows = []
     node = rclpy.create_node('localization_benchmark')
 
-    def pose_cb(kind):
+    def pose_cb(kind, nested=False):
         def cb(m):
             st = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
-            rows.append({'kind': kind, 'stamp': st, 'recv': time.time(), 'a': m.pose.position.x,
-                         'b': m.pose.position.y, 'c': yaw_of(m.pose.orientation)})
+            pose = m.pose.pose if nested else m.pose     # Odometry: PoseWithCovariance
+            rows.append({'kind': kind, 'stamp': st, 'recv': time.time(), 'a': pose.position.x,
+                         'b': pose.position.y, 'c': yaw_of(pose.orientation)})
         return cb
 
     def count_cb(kind):
@@ -247,11 +358,13 @@ def record_run(track, localizer, args, path):
 
     node.create_subscription(PoseStamped, '/localized_pose', pose_cb('loc'), 100)
     node.create_subscription(PoseStamped, '/ground_truth/pose', pose_cb('gt'), 100)
+    node.create_subscription(Odometry, '/odom', pose_cb('odom', nested=True), qos_profile_sensor_data)
     node.create_subscription(Int32, NS + 'lap_count', count_cb('laps'), 10)
     node.create_subscription(Int32, NS + 'collision_count', count_cb('hits'), 10)
     node.create_subscription(LaserScan, '/scan', lambda m: rows.append(
         {'kind': 'scan', 'stamp': 0.0, 'recv': time.time(), 'a': 0, 'b': 0, 'c': 0}), qos_profile_sensor_data)
 
+    set_slip(node, args.slip, seed)
     cmd = (f'exec scripts/race.sh {track} localizer:={localizer} speed_scale:={args.speed_scale} '
            f'controller:={args.controller} ' + ' '.join(args.extra))
     log = open(path.with_suffix('.log'), 'w')
@@ -273,6 +386,8 @@ def record_run(track, localizer, args, path):
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
         log.close()
+        if args.slip:
+            set_slip(node, {}, 0, switch_off=True)
         node.destroy_node()
     write_rows(path, rows)
     if not any(r['kind'] == 'gt' for r in rows):
@@ -288,11 +403,13 @@ def run(args):
         if not (track_dir / f).exists():
             sys.exit(f'{track_dir / f} missing (map the track first: scripts/map_track.sh {args.track})')
     out_dir = Path(args.ws) / 'log' / 'localization_benchmark' / datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+    while out_dir.exists():   # two sessions started in the same second
+        out_dir = out_dir.with_name(out_dir.name + 'b')
     out_dir.mkdir(parents=True)
     localizers = args.localizers.split(',')
     meta = {'track': args.track, 'localizers': localizers, 'duration': args.duration,
             'speed_scale': args.speed_scale, 'controller': args.controller, 'repeats': args.repeats,
-            'extra': args.extra, 'origin': list(read_origin(track_dir)),
+            'extra': args.extra, 'slip': args.slip, 'origin': list(read_origin(track_dir)),
             'started': datetime.now(timezone.utc).isoformat(timespec='seconds')}
     (out_dir / 'meta.json').write_text(json.dumps(meta, indent=1))
     print(f'Results in {out_dir}')
@@ -300,7 +417,7 @@ def run(args):
     try:
         for n in range(1, args.repeats + 1):
             for loc in localizers:   # alternate, so a sim slowing down over time hits both alike
-                record_run(args.track, loc, args, out_dir / f'{loc}_{n}.csv')
+                record_run(args.track, loc, args, out_dir / f'{loc}_{n}.csv', seed=n)
     finally:
         rclpy.shutdown()
     analyze(out_dir)
@@ -317,6 +434,8 @@ def main(argv=None):
     r.add_argument('--controller', default='pure_pursuit', choices=['pure_pursuit', 'map'])
     r.add_argument('--repeats', type=int, default=1)
     r.add_argument('--pause', type=float, default=8.0, help='s between runs')
+    r.add_argument('--slip', type=parse_slip, default={}, metavar='PRESET|k=v,...',
+                   help=f'simulated wheel slip on /odom: {", ".join(SLIP_PRESETS)} or k=v ({", ".join(SLIP_KEYS)})')
     r.add_argument('--ws', default=os.path.expanduser('~/ws'))
     r.add_argument('extra', nargs='*', help='more race launch arguments, e.g. log_laps:=false')
     a = sub.add_parser('analyze', help='re-score a results folder')
