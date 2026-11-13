@@ -1,0 +1,5 @@
+# ground-truth pose of the map origin in the sim world frame (debugging only)
+frame_id: world
+x_m: 0.5037
+y_m: -4.3818
+yaw_rad: -1.61140

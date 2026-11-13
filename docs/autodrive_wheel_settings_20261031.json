@@ -1,0 +1,119 @@
+{
+  "scene_file": "level0",
+  "scene_sha256": "5edbd1bacc15647746e6e89d9bcf1bb9e202d62d47e76ae352497be1404b3f8d",
+  "wheels": [
+    {
+      "path_id": 1905,
+      "game_object_id": 5,
+      "name": "Front Left Wheel Collider",
+      "enabled": true,
+      "radius_m": 0.05900000035762787,
+      "forward": {
+        "extremum_slip": 0.15000000596046448,
+        "extremum_value": 0.8999999761581421,
+        "asymptote_slip": 0.25,
+        "asymptote_value": 0.5799999833106995,
+        "stiffness": 0.800000011920929,
+        "effective_extremum_value": 0.7199999916553494,
+        "effective_asymptote_value": 0.46399999356269817
+      },
+      "sideways": {
+        "extremum_slip": 0.009999999776482582,
+        "extremum_value": 1.0,
+        "asymptote_slip": 0.10000000149011612,
+        "asymptote_value": 0.5,
+        "stiffness": 1.0,
+        "effective_extremum_value": 1.0,
+        "effective_asymptote_value": 0.5
+      }
+    },
+    {
+      "path_id": 1907,
+      "game_object_id": 86,
+      "name": "Front Right Wheel Collider",
+      "enabled": true,
+      "radius_m": 0.05900000035762787,
+      "forward": {
+        "extremum_slip": 0.15000000596046448,
+        "extremum_value": 0.8999999761581421,
+        "asymptote_slip": 0.25,
+        "asymptote_value": 0.5799999833106995,
+        "stiffness": 0.800000011920929,
+        "effective_extremum_value": 0.7199999916553494,
+        "effective_asymptote_value": 0.46399999356269817
+      },
+      "sideways": {
+        "extremum_slip": 0.009999999776482582,
+        "extremum_value": 1.0,
+        "asymptote_slip": 0.10000000149011612,
+        "asymptote_value": 0.5,
+        "stiffness": 1.0,
+        "effective_extremum_value": 1.0,
+        "effective_asymptote_value": 0.5
+      }
+    },
+    {
+      "path_id": 1906,
+      "game_object_id": 46,
+      "name": "Rear Left Wheel Collider",
+      "enabled": true,
+      "radius_m": 0.05900000035762787,
+      "forward": {
+        "extremum_slip": 0.15000000596046448,
+        "extremum_value": 0.8999999761581421,
+        "asymptote_slip": 0.25,
+        "asymptote_value": 0.5799999833106995,
+        "stiffness": 0.800000011920929,
+        "effective_extremum_value": 0.7199999916553494,
+        "effective_asymptote_value": 0.46399999356269817
+      },
+      "sideways": {
+        "extremum_slip": 0.009999999776482582,
+        "extremum_value": 1.0,
+        "asymptote_slip": 0.10000000149011612,
+        "asymptote_value": 0.5,
+        "stiffness": 1.0,
+        "effective_extremum_value": 1.0,
+        "effective_asymptote_value": 0.5
+      }
+    },
+    {
+      "path_id": 1904,
+      "game_object_id": 3,
+      "name": "Rear Right Wheel Collider",
+      "enabled": true,
+      "radius_m": 0.05900000035762787,
+      "forward": {
+        "extremum_slip": 0.15000000596046448,
+        "extremum_value": 0.8999999761581421,
+        "asymptote_slip": 0.25,
+        "asymptote_value": 0.5799999833106995,
+        "stiffness": 0.800000011920929,
+        "effective_extremum_value": 0.7199999916553494,
+        "effective_asymptote_value": 0.46399999356269817
+      },
+      "sideways": {
+        "extremum_slip": 0.009999999776482582,
+        "extremum_value": 1.0,
+        "asymptote_slip": 0.10000000149011612,
+        "asymptote_value": 0.5,
+        "stiffness": 1.0,
+        "effective_extremum_value": 1.0,
+        "effective_asymptote_value": 0.5
+      }
+    }
+  ],
+  "roboracer_components_referencing_all_wheels": [
+    {
+      "component_path_id": 2086,
+      "script": "VehicleController",
+      "wheel_path_ids": [
+        1905,
+        1907,
+        1906,
+        1904
+      ]
+    }
+  ],
+  "limitation": "Serialized scene defaults; runtime code may change friction settings."
+}

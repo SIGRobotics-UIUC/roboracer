@@ -278,8 +278,11 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        if node.guard.ok:   # a held copy leaves the running one's commands alone
-            node.throttle_pub.publish(Float32(data=0.0))
-            node.steer_pub.publish(Float32(data=0.0))
-        node.destroy_node()
-        rclpy.try_shutdown()
+        try:
+            if node.guard.ok:   # a held copy leaves the running one's commands alone
+                node.throttle_pub.publish(Float32(data=0.0))
+                node.steer_pub.publish(Float32(data=0.0))
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except KeyboardInterrupt:  # ros2 launch may forward a second SIGINT during cleanup
+            pass

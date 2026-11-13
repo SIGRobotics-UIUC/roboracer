@@ -25,3 +25,6 @@ frames_*.pdf
 *~
 .DS_Store
 ws/Default.perspective
+
+# Separate upstream plugin checkout; source revision/patch are documented in docs.
+/autodrive_plugin/

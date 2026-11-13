@@ -1,0 +1,26 @@
+{
+  "fork_revision": "070b15ff16f07ee9cab22b15b7fe5815d5d81ebe",
+  "source_bag": "ws/log/native_slip_isolated_retry_20261101/01_rate_3p2/bag",
+  "input_sha256": {
+    "ws/log/native_slip_isolated_retry_20261101/01_rate_3p2/bag/bag_0.db3": "968240928c0ffa2113bb836a8a719ae4f3b4b67fe735304f8aa4057396d0c8de",
+    "ws/log/native_slip_isolated_retry_20261101/01_rate_3p2/bag/metadata.yaml": "afdf462cdab97478b1423456933f519458ca10169f2b484e2be247b499221606",
+    "ws/tracks/porto_odom_trial/raceline.csv": "073abb066446a918340f25d055fffd9050cf0afb72c63218c5761f91fda656ef",
+    "ws/tracks/porto_odom_trial/map_to_world.yaml": "f17b820b9ae7c2889131fd2e5843c331918a0e9ada1a193b586adc13a66dbb1a"
+  },
+  "controller_and_bridge_sha256": {
+    "tracks/porto_odom_trial/raceline.csv": "073abb066446a918340f25d055fffd9050cf0afb72c63218c5761f91fda656ef",
+    "src/control/config/vehicle.yaml": "f31bc2494940269393777916ca9b18b0df2efee97cf3dd35713c94c6ac2a2d46",
+    "src/autodrive_bridge/config/adapter.yaml": "91d42e8ff79d3afe40cfcb8cddbfe9ac6a91d380326692dfc5778b9ab8a0b51f",
+    "src/control/control/map_node.py": "c8d7a54ba8cb7a0419723556fcf1a4fb13418b8214373a274237e1d7bd276f07",
+    "src/control/config/autodrive_map_lut.npz": "3fd94c2a1675206a9adeb6e96a38212195200ce5464ade8961001d2b5b329812",
+    "src/control/control/input_health.py": "12a1b78a3f021558ff8edee89d8e8d147fd9f23282cbfcde63878c26a0935d85",
+    "src/autodrive_bridge/autodrive_bridge/steady_time.py": "ffde5f6aff8e8f8d95058da90ede3253b764ae0fc1e909d8e0b8fe22bed2ba07",
+    "src/autodrive_bridge/autodrive_bridge/fast_bridge.py": "e054e54e50f3f5756378aae264c7aa020575b6da0f60a28f0c7bd867c04c50f7"
+  },
+  "source": "unity",
+  "native_only": true,
+  "analysis_code_sha256": {
+    "ws/scripts/tire_lap_report.py": "d917d7ab49786c45e17b36c958bc4132b3ee9eaa9c32b05030fd2733dacbc5c0",
+    "ws/scripts/wheel_slip_comparison.py": "95f09b109b72d01314d1cccd0b8d0aa756a6f70e39b4a204c7030baca71d13d9"
+  }
+}

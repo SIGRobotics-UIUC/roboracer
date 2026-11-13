@@ -110,6 +110,7 @@ mounting rotation, or Cartographer stops waiting for an IMU it cannot transform.
 | `centerline.csv` | `build_raceline` | TUM input: `# x_m,y_m,w_tr_right_m,w_tr_left_m`, closed loop, driving direction |
 | `raceline.csv` | `build_raceline` | TUM output: `# s_m; x_m; y_m; psi_rad; kappa_radpm; vx_mps; ax_mps2`, `map` frame. Second header line `# raceline: {json}`: method (`mintime`, `mintime-retry`, `centerline`), `clean`, settings `changed`, `notes` (failures, clearance), solver, lap, min wall clearance, build time |
 | `preview.png` | `build_raceline` | map, centerline, track bounds, raceline coloured by speed |
+| `runs/<time>.csv` | `lap_logger_node` (`race.launch.py`) | one row per lap of a race run: time, status, speeds, offset from the raceline, collisions; first line `# run: {json}` with the race settings. Compare runs: `ros2 run control lap_report <name>` |
 
 ## Car parameters (AutoDRIVE RoboRacer)
 

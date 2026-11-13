@@ -93,7 +93,7 @@ def ros():
 def launch(tracks_dir, track, *args):
     env = dict(os.environ, TRACKS_DIR=tracks_dir, ROS_DOMAIN_ID=str(DOMAIN))
     return subprocess.Popen(
-        ['ros2', 'launch', 'control', 'pure_pursuit.launch.py', f'track:={track}',
+        ['ros2', 'launch', 'control', 'pure_pursuit.launch.py', 'use_sim_time:=false', f'track:={track}',
          f'speed_scale:={SPEED_SCALE}', *args],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
 

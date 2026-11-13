@@ -10,13 +10,15 @@ Experimental KLD mode: adaptive_particles:=true (default).
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        SetParameter(name='use_sim_time', value=ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)),
         DeclareLaunchArgument('track', description='track name, loads tracks/<track>/map.yaml'),
         DeclareLaunchArgument('particles', default_value='1000', description='number of particles'),
         DeclareLaunchArgument('adaptive_particles', default_value='true', description='enable KLD population'),

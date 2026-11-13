@@ -1,0 +1,46 @@
+{
+ "date_utc": "2026-11-08",
+ "clean_session_utc": "23:26-23:47",
+ "code": {
+  "repo": "SIGRobotics-UIUC/roboracer (fork guysree-uiuc)",
+  "branch": "localization-benchmark",
+  "commit": "dcdc844",
+  "base": "origin/main aa921ed",
+  "includes": [
+   "467561e localization_gate: hold back Cartographer poses extrapolated past the odometry (sim stalls)"
+  ]
+ },
+ "simulator": {
+  "build": "Udog-ILLINOIS/AutoDRIVE release f1tenth_multitrack_v3 (2026-iros practice build + TrackSelect)",
+  "track": "porto",
+  "launch": "-track porto -autoconnect -screen-width 1280 -screen-height 720",
+  "restarted_before_clean_session": true,
+  "sensor_frames_per_s": "min 40, median 52, max 60 (sim_fps.csv)"
+ },
+ "host": {
+  "machine": "Apple M4, 16 GB, macOS 15 (Darwin 24.6)",
+  "ros": "Humble in Docker (sigrobotics_f1tenth:humble)"
+ },
+ "stack": {
+  "controller": "pure_pursuit (adaptive lookahead on)",
+  "race": "scripts/race.sh porto localizer:=<x> speed_scale:=<s>",
+  "map": "tracks/porto, mapped 2026-10-29 (Cartographer, wall follower)",
+  "raceline": {
+   "method": "mintime",
+   "clean": true,
+   "changed": {},
+   "notes": [],
+   "solver": "IPOPT EXIT: Optimal Solution Found.",
+   "lap_s": 6.75,
+   "min_clearance_m": 0.228,
+   "built": "2026-10-30T00:49:36+00:00",
+   "track": "porto",
+   "config": "/root/ws/install/planning/share/planning/config/racecar.ini"
+  }
+ },
+ "benchmark": {
+  "tool": "ws/scripts/localization_benchmark.py run --track porto --duration 60 --repeats 3 --speed-scale <s>",
+  "order": "cartographer and mcl alternate within each repeat",
+  "ground_truth": "/ground_truth/pose, scoring only"
+ }
+}

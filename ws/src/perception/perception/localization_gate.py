@@ -3,13 +3,23 @@
 
 Started by localization.launch.py (cartographer_node runs with -start_trajectory_with_default_topics
 false). /tracked_pose is relayed unchanged on /localized_pose only while localized, so pure pursuit
-does not drive before that (no poses -> no /drive -> the bridge stops the car after its cmd_timeout).
+does not drive before that (no poses -> no /drive -> the bridge stops the car after its cmd_timeout),
+and not while extrapolated past the sensors (stall, below).
 
   start:     a trajectory with the initial pose identity relative to the frozen map trajectory
              (the car starts at the mapping start pose: race.sh resets the sim car there). The initial
              pose links the new trajectory to the map, so Cartographer matches locally right away.
   localized: the first /constraint_list after the number of constraints to the frozen map first rose
              (the optimization with that constraint runs after it is added).
+  stall:     /tracked_pose is extrapolated to the current time (Cartographer's
+             pose extrapolator), and /clock runs on while the sim stalls (fast_bridge's steady clock), so
+             with no new sensor data the pose runs on at the car's last speed: 0.8-3 m ahead of a car that
+             stood still for 0.4 s on Porto, then snapped back, and pure pursuit steered on it. A pose
+             stamped more than max_pose_lead s after the newest /odom is therefore not relayed (normally it
+             leads by 6 ms, 99 % under 30 ms; in a stall by the stall's length). Pure pursuit coasts
+             through a short gap and stops after its max_pose_age. Without /odom everything is relayed.
+             (Composing TF map -> odom with /odom instead, as mcl_node builds its pose, was worse on Porto:
+             Cartographer's map -> odom jumps with every correction and in stalls; 2-3x the jitter.)
   sim reset: fast_bridge's /autodrive/roboracer_1/sim_reset event (reset command, respawn after a crash,
              any other teleport; the bridge also stops the car). The relay stops at once; after
              debounce s with the car still, the trajectory is finished, and once Cartographer has
@@ -55,8 +65,8 @@ def world_to_map(origin, x, y, yaw):
 
 
 class LocalizationGate(Node):
-    def __init__(self):
-        super().__init__('localization_gate')
+    def __init__(self, **kwargs):
+        super().__init__('localization_gate', **kwargs)
         p = self.declare_parameter
         track = p('track', '').value
         self.config_dir = p('configuration_directory',
@@ -67,6 +77,7 @@ class LocalizationGate(Node):
         self.debounce = p('debounce', 0.5).value
         self.still_speed = p('still_speed', 0.1).value      # m/s: the car has stopped after a reset
         self.timeout = p('timeout', 10.0).value             # s per Cartographer step
+        self.max_pose_lead = p('max_pose_lead', 0.06).value  # s a relayed pose may lead the newest /odom
 
         self.origin = None
         path = os.path.join(track_dir(track), 'map_to_world.yaml')
@@ -83,18 +94,35 @@ class LocalizationGate(Node):
         self.pending = None           # (reason, monotonic time of the last reset signal)
         self.gt = None                # (stamp s, x, y, speed, yaw)
         self.warn_t = 0.0
+        self.odom_t = None            # stamp of the newest /odom
+        self.held = 0                 # poses not relayed in the current stall
+        self.stall_warn_t = 0.0
 
         self.pub = self.create_publisher(PoseStamped, '/localized_pose', 10)
         # first: rclpy runs ready subscriptions in creation order, so a reset closes the relay before
         # a pose that arrived with it is relayed
         self.create_subscription(String, '/autodrive/roboracer_1/sim_reset', self.reset_cb, 10)
+        self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
         self.create_subscription(PoseStamped, '/tracked_pose', self.pose_cb, 10)
         self.create_subscription(MarkerArray, '/constraint_list', self.constraints_cb, 10)
         self.create_subscription(Odometry, '/ground_truth/odom', self.gt_cb, 10)
 
     # ---------------- relay and settle ----------------
+    def odom_cb(self, msg):
+        self.odom_t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+
     def pose_cb(self, msg):
         if self.localized:
+            lead = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 - self.odom_t \
+                if self.odom_t is not None else 0.0
+            if lead > self.max_pose_lead:     # extrapolated past the sensors: the sim stalled
+                self.held += 1
+                if self.held == 1 and time.monotonic() - self.stall_warn_t > 2.0:
+                    self.stall_warn_t = time.monotonic()
+                    self.get_logger().warning(f'no new odometry for {lead:.2f} s (sim stall?): holding '
+                                              'the extrapolated pose back')
+                return
+            self.held = 0
             self.pub.publish(msg)   # stamp and frame_id unchanged
         elif time.monotonic() - self.warn_t > 2.0:
             self.warn_t = time.monotonic()

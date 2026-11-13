@@ -507,11 +507,18 @@ def test_the_good_fit_level_follows_a_lidar_that_fits_less_everywhere(car):
     assert min(c.node.reanchor_floor(), c.node.relocate_floor()) >= c.node.min_fit
 
 
-def test_a_burst_of_re_anchors_pauses_them_and_checks_in_the_background(car):
+def test_a_burst_of_re_anchors_pauses_them_and_checks_in_the_background(car, monkeypatch):
     c = car()
     P = lap()
     c.stand(P[92])
     drive(c, P[93:100])
+    # The synthetic scan cadence, not CPU time spent ray tracing/searching,
+    # determines whether the two-second pause has expired in this test.
+    import perception.mcl_node as mcl_node
+    from types import SimpleNamespace
+    clock = [mcl_node.time.monotonic()]
+    monkeypatch.setattr(mcl_node, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=mcl_node.time.perf_counter))
     for _ in range(3):
         c.node.reanchor(c.node.pf.estimate(), None, 'test')
     assert c.node.burst and c.node.hold_until > 0.0
@@ -520,11 +527,17 @@ def test_a_burst_of_re_anchors_pauses_them_and_checks_in_the_background(car):
     published = []
     for p in P[100:115]:
         before = len(c.poses)
+        clock[0] += c.dt
         c.step(p, block=np.arange(45, 225))
         published.append(len(c.poses) > before)
     assert 'check' in c.searches[n:] and not c.node.burst
     assert not anchors, 're-anchored during the pause'
     assert all(published), 'the car waited'
+
+    assert clock[0] < c.node.hold_until
+    clock[0] = c.node.hold_until + .001
+    drive(c, P[115:121], block=np.arange(45, 225))
+    assert anchors, 'local re-anchors did not resume after the pause expired'
 
 
 def settle(c, n=6):

@@ -3,6 +3,7 @@
 #
 #   ws/scripts/race.sh <name> [speed_scale:=0.5] [max_speed:=0.0] [pose_topic:=/localized_pose] [avoid:=false]
 #                          [localizer:=mcl]    particle filter on map.yaml instead of Cartographer localization
+#                          [log_laps:=true]     lap times to tracks/<name>/runs/ (compare: ros2 run control lap_report <name>)
 #                          [adaptive_lookahead:=true]   lookahead capped by the raceline's curvature (default; :=false = speed term only)
 #
 # Needs the bridge running and tracks/<name>/ from ws/scripts/map_track.sh <name>.
@@ -33,4 +34,4 @@ fi
 
 reset_sim_car
 
-exec ros2 launch control race.launch.py track:="$name" "$@"
+exec ros2 launch control race.launch.py track:="$name" use_sim_time:="$sim_time" "$@"

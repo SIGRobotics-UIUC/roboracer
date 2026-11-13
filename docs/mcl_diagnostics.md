@@ -90,3 +90,29 @@ recovery and frame-jump regressions passed. Python compilation and
 
 The targeted build `colcon build --symlink-install --packages-select perception`
 also passed in the ROS container (one package finished).
+
+## PR preparation (2026-11-12)
+
+The experimental ROS minimum is 300 in both source YAML and the node's fallback,
+with maximum 2000. A regression checks they agree in fixed and adaptive modes.
+The reusable filter constructor and historical synthetic benchmarks retain their
+explicit 200-particle experimental minimum; their saved results were not rewritten.
+
+Upstream main at `e6372b1` was integrated. Its controller selection, lap logging,
+simulator clock propagation and other team changes are preserved. The race-launch
+conflict was resolved by retaining upstream controller dispatch and passing the
+feature's adaptive_particles/particles arguments to MCL. The merged MCL launch
+inherits upstream `use_sim_time:=true`; set `use_sim_time:=false` when operating on
+live inputs without a clock publisher. The diagnostics timer still uses steady
+time. The upstream recovery test's deterministic monotonic clock was retained and
+its test double extended to expose perf_counter for diagnostics timing.
+
+Final combined verification after upstream integration: **206 passed in 138.38
+seconds**, no skips, for test_mcl.py, test_mcl_node.py, test_localization_gate.py
+and test_localization_debug.py. The container command sourced both
+/opt/ros/humble/setup.bash and /root/ws/install/setup.bash and used ROS_DOMAIN_ID=42.
+The race controller-selection regression also passed (1 passed, 1 deselected).
+Perception/control builds and MCL/race `--show-args` launch introspection passed;
+no launch started driving nodes. Full feature diff and whitespace checks passed.
+An initial combined run had the pre-fix clock test double and lacked the installed
+workspace in its environment; the final run above includes both corrections.

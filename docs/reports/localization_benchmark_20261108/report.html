@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Localization benchmark</title>
+<style>
+.viz-root { color-scheme: light; --page:#f9f9f7; --surface-1:#fcfcfb; --text-primary:#0b0b0b; --text-secondary:#52514e;
+  --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10); --series-1:#2a78d6; --series-2:#eb6834;
+  --series-3:#1baf7a; --series-4:#eda100; }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .viz-root { color-scheme: dark;
+  --page:#0d0d0d; --surface-1:#1a1a19; --text-primary:#f0efec; --text-secondary:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10); --series-1:#3987e5; --series-2:#d95926;
+  --series-3:#199e70; --series-4:#c98500; } }
+:root[data-theme="dark"] .viz-root { color-scheme: dark; --page:#0d0d0d; --surface-1:#1a1a19; --text-primary:#f0efec;
+  --text-secondary:#c3c2b7; --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10);
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500; }
+body { margin:0; }
+.viz-root { background:var(--page); color:var(--text-primary); font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  min-height:100vh; padding:32px 24px 48px; box-sizing:border-box; }
+.wrap { max-width:1120px; margin:0 auto; }
+h1 { font-size:22px; font-weight:600; margin:0 0 6px; }
+h2 { font-size:16px; font-weight:600; margin:36px 0 12px; }
+p.sub { color:var(--text-secondary); margin:0 0 20px; font-size:14px; line-height:1.5; max-width:820px; }
+.findings { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin-bottom:8px; }
+.finding { background:var(--surface-1); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+.finding .label { font-size:13px; color:var(--text-secondary); }
+.finding .value { font-size:26px; font-weight:600; margin:4px 0 2px; }
+.finding .note { font-size:13px; color:var(--text-secondary); line-height:1.4; }
+.legend { display:flex; gap:20px; font-size:13px; color:var(--text-secondary); margin:4px 0 12px; }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.key { width:16px; height:2px; border-radius:1px; display:inline-block; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:12px; }
+.card { background:var(--surface-1); border:1px solid var(--border); border-radius:10px; padding:14px 14px 8px; position:relative; }
+.card h3 { font-size:14px; font-weight:600; margin:0; }
+.card .what { font-size:12px; color:var(--muted); margin:2px 0 6px; }
+svg { display:block; width:100%; height:auto; overflow:visible; }
+svg text { font-family:inherit; }
+.tick { font-size:11px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+.end { font-size:11px; fill:var(--text-secondary); }
+.tip { position:absolute; pointer-events:none; background:var(--surface-1); border:1px solid var(--border);
+  border-radius:8px; padding:8px 10px; font-size:12px; line-height:1.5; box-shadow:0 4px 16px rgba(0,0,0,0.12);
+  white-space:nowrap; display:none; z-index:2; }
+.tip b { font-weight:600; }
+table { border-collapse:collapse; width:100%; font-size:12.5px; background:var(--surface-1); border:1px solid var(--border);
+  border-radius:10px; overflow:hidden; }
+th, td { padding:7px 9px; text-align:right; border-bottom:1px solid var(--grid); font-variant-numeric:tabular-nums; }
+th { color:var(--text-secondary); font-weight:600; position:sticky; top:0; background:var(--surface-1); }
+td:first-child, th:first-child, td:nth-child(2), th:nth-child(2) { text-align:left; }
+td:first-child { white-space:nowrap; }
+.tablewrap { overflow-x:auto; }
+.dot-key { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:0; }
+.foot { font-size:12.5px; color:var(--muted); margin-top:14px; line-height:1.5; }
+</style></head>
+<body><div class="viz-root"><div class="wrap">
+<h1>Localization benchmark, clean session: Cartographer vs MCL (Porto, 2026-11-08)</h1>
+<p class="sub">Track porto in the AutoDRIVE simulator, pure pursuit on the raceline, 60 s per run, up to 3 runs per localizer at speed scale 0.5, 0.7, 1.0 (fraction of the planned raceline speed). Ground truth from the simulator is used only for scoring.</p>
+<div class="findings" id="findings"></div>
+<h2>By speed</h2>
+<div class="legend" id="legend"></div>
+<div class="grid" id="charts"></div>
+<h2>Every run</h2>
+<div class="tablewrap"><table id="table"></table></div>
+<p class="foot">Error = distance between the localizer's pose and the simulator's true pose (rear axle), both in the map frame.
+Lines go through the mean of the runs at each speed; dots are single runs. Hover a point for its values.
+A pose jump is a step of the estimate faster than 15 m/s; a stall is a gap over 0.1 s in the simulator's frames.</p>
+</div></div>
+<script>
+const RUNS = [{"name": "cartographer_1", "localizer": "Cartographer (stall fix)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 5487, "paired": 5486, "err_mean": 0.07274068531808896, "err_median": 0.06715322472712487, "err_p95": 0.1377034286863542, "err_max": 0.21779925106909398, "far_share": 0.0007291286912139992, "head_mean": 0.4298240944862102, "head_p95": 1.3258660061202354, "aligned_mean": 0.03733510924641207, "aligned_p95": 0.06906056075520806, "fit_rot_deg": -0.12833334905587532, "fit_shift": 0.07471945148914895, "jitter": 0.019403572937450354, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 0, "scan_hz": 38.675628852733674}, {"name": "cartographer_2", "localizer": "Cartographer (stall fix)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 5542, "paired": 5541, "err_mean": 0.07336146810137335, "err_median": 0.06615512288540605, "err_p95": 0.14135135013400715, "err_max": 0.23673476485035608, "far_share": 0.0034289839379173436, "head_mean": 0.42365268504696524, "head_p95": 1.2454674967748185, "aligned_mean": 0.03852092221823796, "aligned_p95": 0.07265574251293354, "fit_rot_deg": -0.13626374153054607, "fit_shift": 0.0755610722827003, "jitter": 0.018884395697327715, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 0, "scan_hz": 38.78736378325223}, {"name": "cartographer_3", "localizer": "Cartographer (stall fix)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 5260, "paired": 5248, "err_mean": 0.077299201506625, "err_median": 0.0706818999563601, "err_p95": 0.1511065891624134, "err_max": 0.5864453030591136, "far_share": 0.0024771341463414634, "head_mean": 0.4196039019599365, "head_p95": 1.0384904745351806, "aligned_mean": 0.03920635159345, "aligned_p95": 0.077975906312284, "fit_rot_deg": -0.15084905963042197, "fit_shift": 0.08014279086303842, "jitter": 0.021230030528207978, "jumps": 1, "max_jump": 0.6594564140724665, "gaps": 3, "gap_s": 1.672546625137329, "stalls": 4, "stall_s": 1.994654655456543, "laps": 3, "collisions": 0, "scan_hz": 36.54170853776435}, {"name": "mcl_1", "localizer": "MCL (ours)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 2955, "paired": 2955, "err_mean": 0.07115823354303089, "err_median": 0.07296535197196331, "err_p95": 0.1351808288244434, "err_max": 0.18942985954188185, "far_share": 0.0, "head_mean": 0.416598193795211, "head_p95": 0.9690814034209507, "aligned_mean": 0.041914325637534736, "aligned_p95": 0.07848042571485998, "fit_rot_deg": 0.026709931085450358, "fit_shift": 0.060025633538435555, "jitter": 0.003985252356274828, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 0, "scan_hz": 35.876053011744816}, {"name": "mcl_2", "localizer": "MCL (ours)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 2910, "paired": 2910, "err_mean": 0.07246542366849679, "err_median": 0.07488113662825656, "err_p95": 0.13294384283589306, "err_max": 0.19754138094955007, "far_share": 0.0, "head_mean": 0.41529671741119645, "head_p95": 0.9207467037207855, "aligned_mean": 0.036380511693816446, "aligned_p95": 0.061645276135781066, "fit_rot_deg": -0.014544848425184286, "fit_shift": 0.07208867692762669, "jitter": 0.0031538835631706947, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 0, "scan_hz": 34.46790465285588}, {"name": "mcl_3", "localizer": "MCL (ours)", "speed": 0.5, "track": "porto", "duration": 60.0, "folder": "20261108-232613", "poses": 2826, "paired": 2825, "err_mean": 0.08274069532895029, "err_median": 0.08111330962619978, "err_p95": 0.15852014295804476, "err_max": 0.23817302251982495, "far_share": 0.014867256637168142, "head_mean": 1.449236432697931, "head_p95": 4.854588481131407, "aligned_mean": 0.052352985246957584, "aligned_p95": 0.10809164588912251, "fit_rot_deg": 0.2808685133530211, "fit_shift": 0.06104852313937865, "jitter": 0.0059061797511761995, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 1, "stall_s": 0.35715508460998535, "laps": 3, "collisions": 0, "scan_hz": 33.79727887089234}, {"name": "cartographer_1", "localizer": "Cartographer (stall fix)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 5353, "paired": 5352, "err_mean": 0.07367726854924041, "err_median": 0.0715812612785049, "err_p95": 0.13113357473859746, "err_max": 0.33773636894496484, "far_share": 0.01868460388639761, "head_mean": 0.61231104912028, "head_p95": 1.923794345982847, "aligned_mean": 0.042149156012027685, "aligned_p95": 0.09238381446401572, "fit_rot_deg": -0.10544078748677829, "fit_shift": 0.07163347510929823, "jitter": 0.018839774016830974, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 5, "collisions": 1, "scan_hz": 35.72774722951061}, {"name": "cartographer_2", "localizer": "Cartographer (stall fix)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 5025, "paired": 5021, "err_mean": 0.07397820043360377, "err_median": 0.07651641947536847, "err_p95": 0.12678089620563754, "err_max": 0.29522002141233195, "far_share": 0.003784106751643099, "head_mean": 0.6569859361813012, "head_p95": 2.1814253089866154, "aligned_mean": 0.04423373300050035, "aligned_p95": 0.09458607131436139, "fit_rot_deg": -0.11384557845000211, "fit_shift": 0.06965823114608291, "jitter": 0.022272434957816892, "jumps": 0, "max_jump": 0.0, "gaps": 2, "gap_s": 5.232072830200195, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 2, "scan_hz": 35.72955752079496}, {"name": "cartographer_3", "localizer": "Cartographer (stall fix)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 4978, "paired": 4977, "err_mean": 0.06706601881579748, "err_median": 0.0675234189771475, "err_p95": 0.12197871019431522, "err_max": 0.1682958234038963, "far_share": 0.0, "head_mean": 0.5860799552721376, "head_p95": 1.5624585434688323, "aligned_mean": 0.03947950129075193, "aligned_p95": 0.07012872212691572, "fit_rot_deg": -0.12246263950318356, "fit_shift": 0.0659833318561323, "jitter": 0.018154324796029665, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 5, "collisions": 1, "scan_hz": 35.768120262703945}, {"name": "mcl_1", "localizer": "MCL (ours)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 2884, "paired": 2883, "err_mean": 0.07970807947782645, "err_median": 0.08001390945626699, "err_p95": 0.15182874803587382, "err_max": 0.19974812448716683, "far_share": 0.0, "head_mean": 1.0921592304500551, "head_p95": 4.2084118302062254, "aligned_mean": 0.05090062907120895, "aligned_p95": 0.09281748194481615, "fit_rot_deg": 0.19918029091481035, "fit_shift": 0.06725608145964915, "jitter": 0.005747744246654054, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 5, "collisions": 0, "scan_hz": 34.840910937951534}, {"name": "mcl_2", "localizer": "MCL (ours)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 2963, "paired": 2963, "err_mean": 0.079155442970642, "err_median": 0.07604541596121302, "err_p95": 0.14842296704320715, "err_max": 0.19818400070080444, "far_share": 0.0, "head_mean": 1.0749159744026624, "head_p95": 3.819712911651562, "aligned_mean": 0.05652681279848407, "aligned_p95": 0.11331724458254704, "fit_rot_deg": 0.222605871030527, "fit_shift": 0.0550915566533696, "jitter": 0.007610413535586862, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 5, "collisions": 0, "scan_hz": 34.62673195247037}, {"name": "mcl_3", "localizer": "MCL (ours)", "speed": 0.7, "track": "porto", "duration": 60.0, "folder": "20261108-233306", "poses": 2831, "paired": 2831, "err_mean": 0.08201093247517173, "err_median": 0.08732008192629197, "err_p95": 0.14459286531705323, "err_max": 0.19502853060985087, "far_share": 0.0, "head_mean": 1.107900550440532, "head_p95": 4.2108953998155645, "aligned_mean": 0.05539372665585037, "aligned_p95": 0.10384529625905733, "fit_rot_deg": 0.22446492089202094, "fit_shift": 0.05998776747984859, "jitter": 0.010508673407969153, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 0, "scan_hz": 34.82284031605325}, {"name": "cartographer_1", "localizer": "Cartographer (stall fix)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 4104, "paired": 4099, "err_mean": 0.07675513186101837, "err_median": 0.07632464751873572, "err_p95": 0.13945975254903942, "err_max": 0.20989721924953375, "far_share": 0.00024396194193705782, "head_mean": 0.9155403506617379, "head_p95": 2.64466547023533, "aligned_mean": 0.047687990608784314, "aligned_p95": 0.10306943464512691, "fit_rot_deg": -0.0796223698662835, "fit_shift": 0.06807145538316589, "jitter": 0.02715489759505447, "jumps": 0, "max_jump": 0.0, "gaps": 6, "gap_s": 13.264516353607178, "stalls": 1, "stall_s": 0.6907615661621094, "laps": 4, "collisions": 5, "scan_hz": 35.32520156189926}, {"name": "cartographer_2", "localizer": "Cartographer (stall fix)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 3514, "paired": 3506, "err_mean": 0.07605359503656703, "err_median": 0.07860770056062405, "err_p95": 0.13541393023519674, "err_max": 0.7208865852513616, "far_share": 0.0008556759840273817, "head_mean": 0.811516791190678, "head_p95": 2.7199670400878757, "aligned_mean": 0.047436399264256635, "aligned_p95": 0.10018756337223297, "fit_rot_deg": -0.09853176054221736, "fit_shift": 0.06704860372600357, "jitter": 0.03519838889218784, "jumps": 0, "max_jump": 0.0, "gaps": 6, "gap_s": 15.059911012649536, "stalls": 0, "stall_s": 0.0, "laps": 4, "collisions": 6, "scan_hz": 35.038213940571374}, {"name": "cartographer_3", "localizer": "Cartographer (stall fix)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 4424, "paired": 4423, "err_mean": 0.07134580382897339, "err_median": 0.06904864953326142, "err_p95": 0.13120311464454765, "err_max": 0.20830810935218222, "far_share": 0.00022609088853719196, "head_mean": 0.554094944332845, "head_p95": 1.4885056242208325, "aligned_mean": 0.037936692921084654, "aligned_p95": 0.0796196104085683, "fit_rot_deg": -0.01726777451308532, "fit_shift": 0.06679963706574468, "jitter": 0.030660020663285877, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 3, "stall_s": 1.3426611423492432, "laps": 7, "collisions": 0, "scan_hz": 30.14573131022802}, {"name": "mcl_1", "localizer": "MCL (ours)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 2910, "paired": 2909, "err_mean": 0.0898492360151932, "err_median": 0.08694778597004689, "err_p95": 0.17579692125632324, "err_max": 0.2441048924157142, "far_share": 0.015125472671020969, "head_mean": 1.2868092291848527, "head_p95": 4.691046988699226, "aligned_mean": 0.06624014285193588, "aligned_p95": 0.13398333470389334, "fit_rot_deg": 0.2612128353616132, "fit_shift": 0.06551911133867885, "jitter": 0.01615218363509183, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 7, "collisions": 0, "scan_hz": 33.89418841217716}, {"name": "mcl_2", "localizer": "MCL (ours)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 2790, "paired": 2790, "err_mean": 0.09999932183122136, "err_median": 0.09968287959508333, "err_p95": 0.17962027552426427, "err_max": 0.653488106757993, "far_share": 0.02974910394265233, "head_mean": 1.875379405109099, "head_p95": 5.599464768728536, "aligned_mean": 0.07610841956158085, "aligned_p95": 0.19331755983958154, "fit_rot_deg": 0.31178990412421514, "fit_shift": 0.061926819699739954, "jitter": 0.017954258039257345, "jumps": 0, "max_jump": 0.0, "gaps": 2, "gap_s": 1.2029681205749512, "stalls": 2, "stall_s": 0.638664722442627, "laps": 6, "collisions": 1, "scan_hz": 33.24439768445083}, {"name": "mcl_3", "localizer": "MCL (ours)", "speed": 1.0, "track": "porto", "duration": 60.0, "folder": "20261108-233959", "poses": 2309, "paired": 2309, "err_mean": 0.09185978735054948, "err_median": 0.09520037940211609, "err_p95": 0.1634926749743689, "err_max": 0.19386731116063258, "far_share": 0.0, "head_mean": 0.49324983680142415, "head_p95": 1.164341161620134, "aligned_mean": 0.06845600804098301, "aligned_p95": 0.149035242244571, "fit_rot_deg": 0.23258668343668337, "fit_shift": 0.06055589242487652, "jitter": 0.010035380597658588, "jumps": 0, "max_jump": 0.0, "gaps": 0, "gap_s": 0.0, "stalls": 0, "stall_s": 0.0, "laps": 7, "collisions": 0, "scan_hz": 22.451452976281807}];
+const METRICS = [["err_mean", "Mean position error", "cm", 100, "average distance between the estimate and the true pose"], ["err_max", "Worst position error", "cm", 100, "the single largest error in the run"], ["head_p95", "Heading error, 95th percentile", "deg", 1, "95 % of the time the heading was off by less"], ["jitter", "Pose jitter", "mm", 1000, "how much the estimate wobbles over 50 ms: what pure pursuit steers on"], ["jumps", "Pose jumps per run", "", 1, "steps of the estimate faster than 15 m/s (snaps)"], ["collisions", "Crashes per run", "", 1, "the sim's collision count over the 60 s"]];
+const TABLE = ["err_mean", "err_median", "err_p95", "err_max", "far_share", "head_mean", "head_p95", "aligned_mean", "jitter", "jumps", "max_jump", "gap_s", "stalls", "laps", "collisions", "scan_hz"];
+const LOCS = ["Cartographer (stall fix)", "MCL (ours)"];
+const COLOR = l => `var(--series-${LOCS.indexOf(l) + 1})`;
+const SPEEDS = [...new Set(RUNS.map(r => r.speed))].sort((a, b) => a - b);
+const name = l => l;
+// end labels: the name before ' (' when those stay distinct, so they fit beside the plot
+const SHORT = (() => { const s = LOCS.map(l => l.split(' (')[0]); return new Set(s).size === s.length ? s : LOCS; })();
+const short = l => SHORT[LOCS.indexOf(l)];
+const mean = v => v.reduce((a, b) => a + b, 0) / v.length;
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+
+document.getElementById('legend').innerHTML = LOCS.map(l =>
+  `<span><i class="key" style="background:${COLOR(l)}"></i>${name(l)}</span>`).join('');
+
+function nice(max) {
+  if (max <= 0) return [1, 0.5];
+  const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw);
+  return [Math.ceil(max / step) * step, step];
+}
+function fmt(v, unit) { return (Math.abs(v) >= 10 || Number.isInteger(v) ? v.toFixed(0) : v.toFixed(1)) + (unit ? ' ' + unit : ''); }
+
+for (const [key, title, unit, scale, what] of METRICS) {
+  const card = document.createElement('div'); card.className = 'card';
+  card.innerHTML = `<h3>${title}${unit ? ' (' + unit + ')' : ''}</h3><div class="what">${what}</div>`;
+  document.getElementById('charts').appendChild(card);
+  const tip = document.createElement('div'); tip.className = 'tip'; card.appendChild(tip);
+  const W = 460, H = 230, m = {l: 38, r: 132, t: 10, b: 28};
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title}, card);
+  const vals = RUNS.filter(r => r[key] !== undefined).map(r => r[key] * scale);
+  const [ymax, step] = nice(Math.max(...vals, 0) * 1.05);
+  const x = s => m.l + (SPEEDS.length === 1 ? (W - m.l - m.r) / 2 : SPEEDS.indexOf(s) * (W - m.l - m.r) / (SPEEDS.length - 1));
+  const y = v => H - m.b - v / ymax * (H - m.t - m.b);
+  for (let v = 0; v <= ymax + 1e-9; v += step) {
+    el('line', {x1: m.l, x2: W - m.r + 8, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1}, svg);
+    el('text', {x: m.l - 6, y: y(v) + 3.5, 'text-anchor': 'end', class: 'tick'}, svg).textContent = fmt(v);
+  }
+  for (const s of SPEEDS) el('text', {x: x(s), y: H - 8, 'text-anchor': 'middle', class: 'tick'}, svg).textContent = 'speed ' + s;
+  const ends = [];
+  for (const l of LOCS) {
+    const pts = SPEEDS.map(s => { const rs = RUNS.filter(r => r.localizer === l && r.speed === s && r[key] !== undefined);
+      return rs.length ? {s, v: mean(rs.map(r => r[key] * scale)), rs} : null; }).filter(Boolean);
+    if (pts.length > 1) el('path', {d: pts.map((p, i) => (i ? 'L' : 'M') + x(p.s) + ' ' + y(p.v)).join(' '),
+      fill: 'none', stroke: COLOR(l), 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'}, svg);
+    pts.forEach((p, i) => {
+      p.rs.forEach((r, j) => el('circle', {cx: x(p.s) + (j - (p.rs.length - 1) / 2) * 3 + (LOCS.indexOf(l) - (LOCS.length - 1) / 2) * 5,
+        cy: y(r[key] * scale), r: 2.5, fill: COLOR(l), opacity: 0.45}, svg));
+      el('circle', {cx: x(p.s), cy: y(p.v), r: 4.5, fill: COLOR(l), stroke: 'var(--surface-1)', 'stroke-width': 2}, svg);
+      const hit = el('circle', {cx: x(p.s), cy: y(p.v), r: 14, fill: 'transparent', style: 'cursor:default'}, svg);
+      hit.addEventListener('mouseenter', () => {
+        tip.innerHTML = `<b>${name(l)}</b>, speed ${p.s}<br>mean ${fmt(p.v, unit)}<br>` +
+          p.rs.map(r => `${r.name}: ${fmt(r[key] * scale, unit)}`).join('<br>');
+        tip.style.display = 'block';
+        const box = card.getBoundingClientRect(), pt = hit.getBoundingClientRect();
+        let left = pt.left - box.left + 18; if (left + tip.offsetWidth > box.width) left = pt.left - box.left - tip.offsetWidth - 6;
+        tip.style.left = left + 'px'; tip.style.top = Math.max(4, pt.top - box.top - 10) + 'px';
+      });
+      hit.addEventListener('mouseleave', () => tip.style.display = 'none');
+      if (i === pts.length - 1) ends.push({l, v: p.v, y: y(p.v)});
+    });
+  }
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
+  for (const e of ends) {
+    el('rect', {x: W - m.r + 12, y: e.y - 1, width: 8, height: 2, rx: 1, fill: COLOR(e.l)}, svg);
+    el('text', {x: W - m.r + 24, y: e.y + 3.5, class: 'end'}, svg).textContent = `${short(e.l)} ${fmt(e.v, unit)}`;
+  }
+}
+
+const COLS = {err_mean: 'mean err (m)', err_median: 'median (m)', err_p95: 'p95 (m)', err_max: 'max (m)',
+  far_share: '> 0.2 m', head_mean: 'heading mean (°)', head_p95: 'heading p95 (°)', aligned_mean: 'aligned (m)',
+  jitter: 'jitter (m)',
+  jumps: 'jumps', max_jump: 'max jump (m)', gap_s: 'no pose (s)', stalls: 'sim stalls', laps: 'laps',
+  collisions: 'crashes', scan_hz: 'scan Hz'};
+const cell = (k, v) => v === undefined ? '–' : k === 'far_share' ? (v * 100).toFixed(1) + '%' :
+  Number.isInteger(v) ? v : ['head_mean', 'head_p95', 'gap_s', 'max_jump', 'err_max', 'scan_hz'].includes(k) ? v.toFixed(k === 'scan_hz' ? 0 : 2) : v.toFixed(3);
+const rows = [...RUNS].sort((a, b) => a.speed - b.speed || LOCS.indexOf(a.localizer) - LOCS.indexOf(b.localizer) ||
+  a.folder.localeCompare(b.folder) || a.name.localeCompare(b.name));
+const session = r => /-(\d\d)(\d\d)/.test(r.folder) ? ' <span style="color:var(--muted)">' +
+  r.folder.replace(/.*-(\d\d)(\d\d)\d\d$/, '$1:$2') + ' UTC</span>' : '';
+document.getElementById('table').innerHTML = '<tr><th>run</th><th>speed</th>' + TABLE.map(k => `<th>${COLS[k]}</th>`).join('') + '</tr>' +
+  rows.map(r => `<tr><td><i class="dot-key" style="background:${COLOR(r.localizer)}"></i>${name(r.localizer)} ${r.name.split('_').pop()}${session(r)}</td>` +
+    `<td>${r.speed}</td>` + TABLE.map(k => `<td>${cell(k, r[k])}</td>`).join('') + '</tr>').join('');
+
+document.getElementById('findings').innerHTML = [["Cartographer (stall fix): crashes in 9 runs", "15", "mean error 7.4 cm; worst 72 cm; jitter 24 mm; 1 pose jump"], ["MCL (ours): crashes in 9 runs", "1", "mean error 8.3 cm; worst 65 cm; jitter 9 mm; 0 pose jumps"]].map(f =>
+  `<div class="finding"><div class="label">${f[0]}</div><div class="value">${f[1]}</div><div class="note">${f[2]}</div></div>`).join('');
+</script></body></html>

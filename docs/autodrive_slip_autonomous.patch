@@ -1,0 +1,10 @@
+--- a/track_select_windows/WheelSlipPlugin.cs
++++ b/track_select_windows/WheelSlipPlugin.cs
+@@ -45,6 +45,7 @@
+             if (vehicle == null)
+                 vehicle = UnityEngine.Object.FindObjectOfType<VehicleController>();
+             if (vehicle == null) return;
++            if (Environment.GetCommandLineArgs().Contains("-autonomous")) vehicle.DrivingMode = 1;
+
+             WheelCollider?[] wheels =
+             {

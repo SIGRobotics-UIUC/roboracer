@@ -4,6 +4,7 @@ import math
 import pytest
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -57,6 +58,33 @@ def test_gate_opens_on_message_after_count_rises(node):
     msg.header.frame_id = 'map'
     node.pose_cb(msg)
     assert pub == [msg]
+
+
+def stamped(cls, t):
+    msg = cls()
+    msg.header.stamp.sec, msg.header.stamp.nanosec = int(t), int(round((t % 1) * 1e9))
+    return msg
+
+
+def test_pose_extrapolated_past_the_odometry_is_held(node):
+    # Cartographer extrapolates /tracked_pose to now; in a sim stall no /odom arrives and it runs ahead
+    pub = []
+    node.pub.publish = pub.append
+    node.localized = True
+    node.pose_cb(stamped(PoseStamped, 100.0))          # no /odom yet: relayed
+    node.odom_cb(stamped(Odometry, 100.00))
+    node.pose_cb(stamped(PoseStamped, 100.03))          # normal lead: relayed
+    node.pose_cb(stamped(PoseStamped, 100.07))          # 70 ms ahead of the sensors: held
+    node.pose_cb(stamped(PoseStamped, 100.40))          # deep in the stall: held
+    assert [round(m.header.stamp.sec + m.header.stamp.nanosec * 1e-9, 2) for m in pub] == [100.0, 100.03]
+    assert node.held == 2
+    node.odom_cb(stamped(Odometry, 100.41))            # the sim resumes
+    node.pose_cb(stamped(PoseStamped, 100.42))
+    assert len(pub) == 3 and node.held == 0
+
+
+def test_odometry_is_subscribed(node):
+    assert '/odom' in [s.topic_name for s in node.subscriptions]
 
 
 def test_stale_constraints_do_not_open_gate(node):

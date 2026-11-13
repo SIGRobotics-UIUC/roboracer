@@ -1,0 +1,217 @@
+{
+  "bag": "/root/ws/log/native_slip_isolated_retry_20261101/01_rate_3p2/bag",
+  "track_dir": "/root/ws/tracks/porto_odom_trial",
+  "lap": {
+    "selection": "native:2",
+    "full_lap": true,
+    "boundary_source": "native counter bag-receipt times; approximately one frame uncertainty",
+    "start_native_count": 1,
+    "end_native_count": 2,
+    "continuous_geometry": true,
+    "complete_laps_available": 1
+  },
+  "track_length_m": 26.895670659139995,
+  "selected_intervals": 430,
+  "selected_distance_m": 27.041756486178233,
+  "long_frame_intervals": 0,
+  "start_stamp_ns": 1793558653709472157,
+  "end_stamp_ns": 1793558667654411254,
+  "settings": {
+    "wheelbase": 0.33,
+    "track_width": 0.236,
+    "wheel_radius": 0.0585,
+    "longitudinal_peak": 0.15,
+    "lateral_peak": 0.01,
+    "velocity_reference_x": 0.15532,
+    "max_steering_pair_age": 0.03,
+    "minimum_speed": 0.5,
+    "maximum_interval": 0.2,
+    "frame_gap_warning": 0.12,
+    "max_velocity_direction_residual": 0.02,
+    "sustained_crossing_seconds": 0.3,
+    "sustained_crossing_min_intervals": 3
+  },
+  "unity_only": true,
+  "slip_source": "unity",
+  "metric_names": [
+    "front_lateral_peak_ratio",
+    "front_longitudinal_peak_ratio",
+    "rear_lateral_peak_ratio",
+    "rear_longitudinal_peak_ratio"
+  ],
+  "threshold_source": "https://autodrive-ecosystem.github.io/competitions/roboracer-sim-racing-guide-2026/#132-vehicle-dynamics",
+  "warnings": [
+    "Unity WheelHit slip is simulator contact telemetry; slip ratios do not measure tire-force utilization.",
+    "Configured peak coordinates: lateral 0.01, longitudinal 0.15. Serialized scene values were inspected separately; runtime overrides are not measured here.",
+    "Instantaneous endpoint slip is used. Both wheels must be grounded for an axle-level ratio. Missing native readings remain unavailable.",
+    "Distance fractions and crossing durations approximate sampled exposure. Shorter peaks between frames can be missed; timing-uncertain events are flagged.",
+    "Lap boundaries come from native counter receipt times, with approximately one frame uncertainty. Ground-truth pose supplies the track projection and tracking error.",
+    "Sustained crossings are a persistence heuristic, not proof of physical saturation."
+  ],
+  "quality_flag_counts": {
+    "low_speed_or_invalid_motion": 3
+  },
+  "tracking_error": {
+    "valid_intervals": 430,
+    "valid_distance_m": 27.04175648617823,
+    "distance_weighted_rms_m": 0.06618029549026569,
+    "p95_abs_m": 0.11470895043829309,
+    "maximum_abs_m": 0.12346512156007958,
+    "mean_signed_m": 0.0006454947449522977,
+    "p95_abs_heading_deg": 5.426909965065744
+  },
+  "crossing_events": [
+    {
+      "metric": "front_lateral_peak_ratio",
+      "classification": "brief",
+      "intervals": 1,
+      "duration_wall_s": 0.023888322,
+      "peak_ratio": 1.2448789,
+      "start_stamp_ns": 1793558666926630586,
+      "end_stamp_ns": 1793558666950518908,
+      "start_index": 412,
+      "end_index": 412,
+      "peak_index": 412,
+      "max_abs_steering_rate_wall_dps": 0.0
+    },
+    {
+      "metric": "front_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 2,
+      "duration_wall_s": 0.105674137,
+      "peak_ratio": 2.8247458,
+      "start_stamp_ns": 1793558656129610830,
+      "end_stamp_ns": 1793558656235284967,
+      "start_index": 58,
+      "end_index": 59,
+      "peak_index": 58,
+      "max_abs_steering_rate_wall_dps": 14.763356804983635
+    },
+    {
+      "metric": "front_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 1,
+      "duration_wall_s": 0.029688517,
+      "peak_ratio": 1.1276392,
+      "start_stamp_ns": 1793558661560625122,
+      "end_stamp_ns": 1793558661590313639,
+      "start_index": 210,
+      "end_index": 210,
+      "peak_index": 210,
+      "max_abs_steering_rate_wall_dps": 6.1756688550493015
+    },
+    {
+      "metric": "rear_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 2,
+      "duration_wall_s": 0.105674137,
+      "peak_ratio": 2.860108666666667,
+      "start_stamp_ns": 1793558656129610830,
+      "end_stamp_ns": 1793558656235284967,
+      "start_index": 58,
+      "end_index": 59,
+      "peak_index": 58,
+      "max_abs_steering_rate_wall_dps": 14.763356804983635
+    },
+    {
+      "metric": "rear_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 1,
+      "duration_wall_s": 0.031217545000000003,
+      "peak_ratio": 1.4889999333333335,
+      "start_stamp_ns": 1793558659728575994,
+      "end_stamp_ns": 1793558659759793539,
+      "start_index": 151,
+      "end_index": 151,
+      "peak_index": 151,
+      "max_abs_steering_rate_wall_dps": 41.66294521358367
+    },
+    {
+      "metric": "rear_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 2,
+      "duration_wall_s": 0.069282648,
+      "peak_ratio": 1.117776,
+      "start_stamp_ns": 1793558660000347062,
+      "end_stamp_ns": 1793558660069629710,
+      "start_index": 159,
+      "end_index": 160,
+      "peak_index": 159,
+      "max_abs_steering_rate_wall_dps": 45.23379849273969
+    },
+    {
+      "metric": "rear_longitudinal_peak_ratio",
+      "classification": "brief",
+      "intervals": 1,
+      "duration_wall_s": 0.029688517,
+      "peak_ratio": 1.1089462,
+      "start_stamp_ns": 1793558661560625122,
+      "end_stamp_ns": 1793558661590313639,
+      "start_index": 210,
+      "end_index": 210,
+      "peak_index": 210,
+      "max_abs_steering_rate_wall_dps": 6.1756688550493015
+    }
+  ],
+  "crossing_counts": {
+    "front_lateral_peak_ratio": {
+      "brief": 1,
+      "sustained": 0,
+      "timing_uncertain": 0
+    },
+    "front_longitudinal_peak_ratio": {
+      "brief": 2,
+      "sustained": 0,
+      "timing_uncertain": 0
+    },
+    "rear_lateral_peak_ratio": {
+      "brief": 0,
+      "sustained": 0,
+      "timing_uncertain": 0
+    },
+    "rear_longitudinal_peak_ratio": {
+      "brief": 4,
+      "sustained": 0,
+      "timing_uncertain": 0
+    }
+  },
+  "metrics": {
+    "front_lateral_peak_ratio": {
+      "valid_intervals": 430,
+      "valid_distance_m": 27.041756486178233,
+      "median": 0.18011621499999997,
+      "p95": 0.5340353879999999,
+      "maximum": 1.2448789,
+      "near_or_beyond_peak_distance_pct": 0.5610572791033696,
+      "beyond_peak_distance_pct": 0.14374509134827357
+    },
+    "front_longitudinal_peak_ratio": {
+      "valid_intervals": 430,
+      "valid_distance_m": 27.041756486178233,
+      "median": 0.33205124333333336,
+      "p95": 0.6516933166666663,
+      "maximum": 2.8247458,
+      "near_or_beyond_peak_distance_pct": 2.349603440669795,
+      "beyond_peak_distance_pct": 1.340798453394952
+    },
+    "rear_lateral_peak_ratio": {
+      "valid_intervals": 430,
+      "valid_distance_m": 27.041756486178233,
+      "median": 0.0302035135,
+      "p95": 0.10383902699999988,
+      "maximum": 0.14060324999999999,
+      "near_or_beyond_peak_distance_pct": 0.0,
+      "beyond_peak_distance_pct": 0.0
+    },
+    "rear_longitudinal_peak_ratio": {
+      "valid_intervals": 430,
+      "valid_distance_m": 27.041756486178233,
+      "median": 0.3411068033333333,
+      "p95": 0.7911453316666662,
+      "maximum": 2.860108666666667,
+      "near_or_beyond_peak_distance_pct": 4.233924027500524,
+      "beyond_peak_distance_pct": 1.7880255385691113
+    }
+  },
+  "regenerate_command": "python3 scripts/tire_lap_report.py log/native_slip_isolated_retry_20261101/01_rate_3p2/bag --track-dir tracks/porto_odom_trial --lap native:2 --unity-only --output log/unity_slip_title_update_20261101"
+}

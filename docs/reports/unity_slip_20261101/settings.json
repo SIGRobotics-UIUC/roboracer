@@ -1,0 +1,15 @@
+{
+  "wheelbase": 0.33,
+  "track_width": 0.236,
+  "wheel_radius": 0.0585,
+  "longitudinal_peak": 0.15,
+  "lateral_peak": 0.01,
+  "velocity_reference_x": 0.15532,
+  "max_steering_pair_age": 0.03,
+  "minimum_speed": 0.5,
+  "maximum_interval": 0.2,
+  "frame_gap_warning": 0.12,
+  "max_velocity_direction_residual": 0.02,
+  "sustained_crossing_seconds": 0.3,
+  "sustained_crossing_min_intervals": 3
+}

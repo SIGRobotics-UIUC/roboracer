@@ -166,3 +166,27 @@ def test_non_finite_commands_sent_as_zero(bridge, bad):
     bridge._steering_cb(Float32(data=bad))
     reply = bridge._reply()
     assert reply['V1 Throttle'] == '0.0' and reply['V1 Steering'] == '0.0'
+
+
+def test_native_wheel_slip_preserves_frame_stamp(bridge):
+    import json
+    bridge.slip_pub = Record()
+    bridge.on_frame(dict(FRAME, **{'V1 Wheel Slip': '1 .1 -.2 1 .3 -.4 0 0 0 1 .5 -.6'}))
+    d = json.loads(bridge.slip_pub.data[0])
+    assert d['stamp_ns'] > 0
+    assert [w['name'] for w in d['wheels']] == ['front_left', 'front_right', 'rear_left', 'rear_right']
+    assert d['wheels'][0]['sideways'] == -.2
+    assert d['wheels'][2]['grounded'] is False
+
+
+def test_bad_native_slip_does_not_break_control_frame(bridge):
+    bridge.slip_pub = Record()
+    reply = bridge.on_frame(dict(FRAME, **{'V1 Wheel Slip': '1 nan 0'}))
+    assert 'V1 Throttle' in reply
+    assert bridge.slip_pub.data == []
+
+
+def test_startup_frame_without_lidar_still_gets_control_reply(bridge):
+    initial = dict(FRAME)
+    del initial['V1 LIDAR Range Array']
+    assert 'V1 Throttle' in bridge.on_frame(initial)

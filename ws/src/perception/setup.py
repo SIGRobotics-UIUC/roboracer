@@ -31,6 +31,7 @@ setup(
             'corrector = perception.corrector:main',
             'localization_gate = perception.localization_gate:main',
             'mcl_node = perception.mcl_node:main',
+            'localization_debug = perception.localization_debug:main',
         ],
     },
 )
