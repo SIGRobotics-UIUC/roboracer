@@ -18,6 +18,7 @@ that save_map writes (ROS map_server format, trinary).
 """
 import math
 import os
+from statistics import NormalDist
 
 import numpy as np
 import yaml
@@ -115,9 +116,27 @@ def select_beams(ranges, angle_min, angle_increment, n_beams, range_min, range_m
 class ParticleFilter:
     def __init__(self, n=1000, seed=None, sigma_hit=0.15, z_hit=0.8, z_rand=0.2, likelihood_scale=0.4,
                  noise_x=(0.10, 0.02), noise_y=(0.05, 0.05), noise_yaw=(0.05, 0.10), resample_ratio=0.5,
-                 wall_penalty=1e-3, unknown_penalty=1.0):
+                 wall_penalty=1e-3, unknown_penalty=1.0, adaptive_particles=False,
+                 min_particles=200, max_particles=2000, pf_err=0.05, pf_z=0.99,
+                 kld_bin_xy=0.20, kld_bin_yaw=0.10):
         """noise_*: standard deviation of the motion per metre travelled and per radian turned."""
-        self.n = int(n)
+        for name, value in [('n', n), ('min_particles', min_particles), ('max_particles', max_particles)]:
+            if not np.isfinite(value) or value < 1 or int(value) != value:
+                raise ValueError(f'{name} must be a positive integer')
+        if min_particles > max_particles:
+            raise ValueError('min_particles must not exceed max_particles')
+        if not all(np.isfinite(v) and v > 0 for v in (pf_err, kld_bin_xy, kld_bin_yaw)):
+            raise ValueError('KLD error and bin widths must be finite and positive')
+        if not np.isfinite(pf_z) or not 0.5 < pf_z < 1.0:
+            raise ValueError('pf_z must be a confidence probability between 0.5 and 1')
+        self.adaptive_particles = adaptive_particles
+        self.min_particles, self.max_particles = int(min_particles), int(max_particles)
+        self.pf_err, self.kld_z = pf_err, NormalDist().inv_cdf(pf_z)
+        self.kld_bin_xy = kld_bin_xy
+        # Equal circular bins, no short last bin; center a bin on the +/-pi seam.
+        self.yaw_bins = max(1, math.ceil(2 * math.pi / kld_bin_yaw))
+        self.yaw_bin_width = 2 * math.pi / self.yaw_bins
+        self.n = int(np.clip(n, min_particles, max_particles)) if adaptive_particles else int(n)
         self.rng = np.random.default_rng(None if seed is None or seed < 0 else seed)
         self.sigma_hit, self.z_hit, self.z_rand = sigma_hit, z_hit, z_rand
         self.likelihood_scale = likelihood_scale   # <1 tempers the beams' correlation: keeps the cloud diverse
@@ -130,7 +149,21 @@ class ParticleFilter:
         self.w = np.full(self.n, 1.0 / self.n)
 
     # ---------------- initialization ----------------
-    def init_gaussian(self, pose, std_xy, std_yaw):
+    def init_gaussian(self, pose, std_xy, std_yaw, min_particles=None):
+        """Initialize at the current count, optionally raising the adaptive recovery floor.
+
+        The requested floor is capped at max_particles and never shrinks a cloud.
+        Fixed mode always retains its original population.
+        """
+        if min_particles is not None:
+            if not np.isfinite(min_particles) or min_particles < 1 or int(min_particles) != min_particles:
+                raise ValueError('initialization min_particles must be a positive integer')
+            if self.adaptive_particles:
+                n = max(self.n, min(int(min_particles), self.max_particles))
+                if n != self.n:
+                    self.p = np.empty((n, 3))
+                    self.w = np.empty(n)
+                    self.n = n
         self.p[:, 0] = pose[0] + self.rng.normal(0.0, std_xy, self.n)
         self.p[:, 1] = pose[1] + self.rng.normal(0.0, std_xy, self.n)
         self.p[:, 2] = wrap(pose[2] + self.rng.normal(0.0, std_yaw, self.n))
@@ -182,15 +215,70 @@ class ParticleFilter:
         return 1.0 / float(np.sum(self.w ** 2))
 
     def resample(self, force=False):
-        """Low-variance resampling when the effective sample size drops below resample_ratio * n."""
+        """Resample below resample_ratio * n ESS (systematic fixed mode; categorical KLD mode)."""
         if not force and self.neff() >= self.resample_ratio * self.n:
             return False
+        if self.adaptive_particles:
+            self._resample_kld()
+            return True
         positions = (self.rng.random() + np.arange(self.n)) / self.n
         cumulative = np.cumsum(self.w)
         cumulative[-1] = 1.0
         self.p = self.p[np.searchsorted(cumulative, positions)]
         self.w[:] = 1.0 / self.n
         return True
+
+    def pose_bin(self, pose):
+        """Translation bins in metres and periodic yaw bins (actual width <= requested width)."""
+        x, y, yaw = pose
+        if not np.isfinite(pose).all():
+            raise ValueError('KLD resampling requires finite particles')
+        yaw_bin = math.floor(((float(wrap(yaw)) + math.pi + self.yaw_bin_width / 2)
+                              % (2 * math.pi)) / self.yaw_bin_width) % self.yaw_bins
+        return math.floor(x / self.kld_bin_xy), math.floor(y / self.kld_bin_xy), yaw_bin
+
+    def kld_required(self, k):
+        """Wilson-Hilferty KLD population bound; one occupied bin uses the configured floor."""
+        if k <= 1:
+            return self.min_particles
+        a = 2.0 / (9.0 * (k - 1))
+        # Compare in log space so even tiny positive error settings cannot overflow.
+        log_n = (math.log(k - 1) - math.log(2.0) - math.log(self.pf_err)
+                 + 3 * math.log(1 - a + self.kld_z * math.sqrt(a)))
+        if log_n >= math.log(self.max_particles):
+            return self.max_particles
+        return max(self.min_particles, math.ceil(math.exp(log_n)))
+
+    def _resample_kld(self):
+        """Independent categorical draws from the weighted source, with sequential KLD stopping.
+
+        A fresh uniform variate selects each ancestor through the inverse CDF.
+        The source distribution stays fixed throughout this resampling operation;
+        only occupied output bins determine the requested number of draws.
+        """
+        if not np.isfinite(self.p).all():
+            raise ValueError('KLD resampling requires finite particles')
+        weights = np.where(np.isfinite(self.w) & (self.w >= 0), self.w, 0.0)
+        scale = weights.max()
+        weights = weights / scale if scale > 0 else np.ones(self.n)
+        cumulative = np.cumsum(weights / weights.sum())
+        cumulative[-1] = 1.0
+        sampled = np.empty((self.max_particles, 3))
+        occupied = set()
+        required = self.min_particles
+        for i in range(self.max_particles):
+            index = np.searchsorted(cumulative, self.rng.random(), side='right')
+            pose = self.p[index]
+            sampled[i] = pose
+            key = self.pose_bin(pose)
+            if key not in occupied:
+                occupied.add(key)
+                required = self.kld_required(len(occupied))
+            if i + 1 >= required:
+                break
+        self.p = sampled[:i + 1].copy()
+        self.n = len(self.p)
+        self.w = np.full(self.n, 1.0 / self.n)
 
     # ---------------- estimate ----------------
     def estimate(self):

@@ -7,6 +7,7 @@ and a stretch the map does not have (a low fit never stops it).
 """
 import math
 import threading
+import uuid
 
 import numpy as np
 import pytest
@@ -47,7 +48,9 @@ class Car:
 
     def __init__(self, lmap, **params):
         args = ['--ros-args', '-p', 'track:=synth', '-p', 'seed:=1', '-p', 'publish_particles:=false',
-                '-p', 'search_period:=0.0', '-p', 'search_period_max:=0.0', '-p', 'debounce:=0.0']
+                '-p', 'search_period:=0.0', '-p', 'search_period_max:=0.0', '-p', 'debounce:=0.0',
+                # Each Car owns its diagnostics transport, even in a shared ROS domain.
+                '-r', f'/mcl/diagnostics:=/test_mcl_{uuid.uuid4().hex}/diagnostics']
         for k, v in params.items():
             args += ['-p', f'{k}:={v}']
         rclpy.init(args=args)
@@ -112,11 +115,12 @@ class Car:
         return p.position.x, p.position.y, 2.0 * math.atan2(p.orientation.z, p.orientation.w)
 
 
-@pytest.fixture
-def car(tracks, lmap):
+@pytest.fixture(params=[False, True], ids=["fixed", "adaptive"])
+def car(tracks, lmap, request):
     cars = []
 
     def make(**params):
+        params.setdefault("adaptive_particles", request.param)
         cars.append(Car(lmap, **params))
         return cars[-1]
     yield make
@@ -516,7 +520,8 @@ def test_a_burst_of_re_anchors_pauses_them_and_checks_in_the_background(car, mon
     import perception.mcl_node as mcl_node
     from types import SimpleNamespace
     clock = [mcl_node.time.monotonic()]
-    monkeypatch.setattr(mcl_node, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(mcl_node, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=mcl_node.time.perf_counter))
     for _ in range(3):
         c.node.reanchor(c.node.pf.estimate(), None, 'test')
     assert c.node.burst and c.node.hold_until > 0.0
@@ -808,3 +813,207 @@ def test_a_reverify_while_driving_never_moves_the_car_on_one_search(car):
     c.node.on_verify([(far, 0.99)], (far, [], 'fit 0.99'), (0.0, 0.0, 0.0), 1.0, 0.99, 0.3, here, may_move=False)
     assert pose_error(here, c.node.pf.estimate())[0] < 0.05
     assert c.node.alternatives is not None and any(pose_error(far, q)[0] < 0.2 for q in c.node.alternatives.poses)
+
+
+def test_cloud_publication_after_population_change(car):
+    c = car()
+    pf = c.node.pf
+    pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    pf.resample(force=True)
+    clouds = []
+    c.node.particles_pub.publish = clouds.append
+    c.node.publish_cloud(c.node.get_clock().now().to_msg())
+    assert clouds[-1].header.frame_id == 'map'
+    assert len(clouds[-1].poses) == len(pf.p[::max(1, pf.n // 200)])
+    assert all(p.position.x == pytest.approx(1.45) for p in clouds[-1].poses)
+
+
+@pytest.mark.parametrize('event', ['find', 'verify', 'relocate', 'switch', 'initialpose', 'local'])
+@pytest.mark.parametrize('floor,maximum', [(1000, 2000), (1200, 500)])
+def test_recovery_callers_raise_population_but_local_reanchors_do_not(car, event, floor, maximum):
+    from types import SimpleNamespace
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+
+    c = car(recovery_min_particles=floor, max_particles=maximum)
+    node, here, far = c.node, (1.45, 1.45, 0.0), (5.0, 1.45, 0.0)
+    node.odom_cb(c.odom(here))
+    node.init_filter(here, 'test', quiet=True)
+    node.pf.init_gaussian(here, 0, 0)
+    node.pf.resample(force=True)
+    before = node.pf.n
+    node.localized = True
+    choice = (far, [], 'test')
+    if event == 'find':
+        node.search = 'lost'
+        node.on_find([], choice, (0, 0, 0), 1, 'full')
+    elif event == 'verify':
+        node.on_verify([], choice, (0, 0, 0), 1, .99, .1, here)
+    elif event == 'relocate':
+        for _ in range(2):
+            node.on_check(choice, (0, 0, 0), 1, .99, .1, here)
+    elif event == 'switch':
+        node.alternatives = SimpleNamespace(update=lambda *a: (far, 2, 0), poses=[], odom0=here, travelled=1.0)
+        node.validate([], [], LASER, here)
+    elif event == 'initialpose':
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.pose.pose.position.x, msg.pose.pose.position.y = far[:2]
+        msg.pose.pose.orientation.w = 1.0
+        node.initialpose_cb(msg)
+    else:
+        node.reanchor(here, here, 'test')
+    expected = max(before, min(floor, maximum)) if node.pf.adaptive_particles and event != 'local' else before
+    assert node.pf.n == expected
+    assert node.pf.w == pytest.approx(np.full(expected, 1 / expected))
+    assert node.pf.p.shape == (expected, 3)
+    assert node.localized == (event not in ('find', 'initialpose'))
+
+
+def test_diagnostics_values_unavailable_zero_and_current_cloud(car):
+    from diagnostic_msgs.msg import DiagnosticStatus
+
+    c = car()
+    node = c.node
+    messages = []
+    node.diagnostics_pub.publish = messages.append
+
+    def snapshot():
+        node.publish_diagnostics()
+        assert len(messages[-1].status) == 1
+        status = messages[-1].status[0]
+        assert status.name == 'mcl/localization'
+        return status, {v.key: v.value for v in status.values}
+
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.WARN
+    assert values['initialized'] == values['localized'] == 'false'
+    assert int(values['particle_count']) == node.pf.n
+    assert values['resampling_count'] == '0'
+    for key in ('effective_sample_size', 'position_std_m', 'yaw_std_rad',
+                'pf_update_duration_ms', 'pf_update_age_sec'):
+        assert values[key] == 'unavailable'
+
+    node.odom_cb(c.odom((1.45, 1.45, 0)))
+    node.init_filter((1.45, 1.45, 0), 'test', quiet=True)
+    node.pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    node.pf.resample(force=True)  # direct test setup, not a node update
+    node.localized = True
+    node.last_pf_update_duration_ms = 0.0  # available zero must not become unavailable
+    node.resampling_count = 7
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.OK
+    assert values['initialized'] == values['localized'] == 'true'
+    assert int(values['particle_count']) == node.pf.n
+    assert float(values['effective_sample_size']) == pytest.approx(node.pf.neff())
+    assert float(values['position_std_m']) == pytest.approx(0, abs=1e-12)
+    assert float(values['yaw_std_rad']) == pytest.approx(node.pf.spread()[1])
+    assert float(values['pf_update_duration_ms']) == 0
+    assert int(values['resampling_count']) == 7
+    node.pf.p[:, 0] += np.linspace(0, .2, node.pf.n)
+    node.pf.w = np.arange(1, node.pf.n + 1, dtype=float)
+    node.pf.w /= node.pf.w.sum()
+    particles, weights = node.pf.p.copy(), node.pf.w.copy()
+    rng_state = node.pf.rng.bit_generator.state
+    _, values = snapshot()
+    assert float(values['effective_sample_size']) == pytest.approx(node.pf.neff())
+    assert float(values['position_std_m']) == pytest.approx(node.pf.spread()[0])
+    assert float(values['yaw_std_rad']) == pytest.approx(node.pf.spread()[1])
+    np.testing.assert_array_equal(node.pf.p, particles)
+    np.testing.assert_array_equal(node.pf.w, weights)
+    assert node.pf.rng.bit_generator.state == rng_state
+    node.reset_cb(String(data='test'))
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.WARN
+    assert values['localized'] == 'false'
+    assert values['resampling_count'] == '7'  # lifetime count survives reset/recovery
+    node.init_filter((1.45, 1.45, 0), 'test recovery', quiet=True, recovery=True)
+    assert node.resampling_count == 7
+    _, values = snapshot()
+    assert int(values['particle_count']) == node.pf.n
+    node.pf.w[:] = np.nan
+    _, values = snapshot()
+    for key in ('effective_sample_size', 'position_std_m', 'yaw_std_rad'):
+        assert values[key] == 'unavailable'
+
+
+def test_diagnostics_count_actual_resamples_and_time_only_completed_updates(car, monkeypatch):
+    c = car(force_adaptive_resample=True)
+    node = c.node
+    outcomes = []
+    resample = node.pf.resample
+
+    def recorded_resample(*args, **kwargs):
+        result = resample(*args, **kwargs)
+        outcomes.append(result)
+        return result
+
+    monkeypatch.setattr(node.pf, 'resample', recorded_resample)
+    c.stand(lap()[0], n=16)
+    assert node.localized
+    assert node.resampling_count == sum(outcomes) > 0
+    assert node.last_pf_update_duration_ms is not None
+    assert node.last_pf_update_duration_ms >= 0
+    before = (node.resampling_count, node.last_pf_update_duration_ms, node.last_pf_update_time)
+    c.step(lap()[0])  # stationary localized scan skips PF work
+    assert (node.resampling_count, node.last_pf_update_duration_ms, node.last_pf_update_time) == before
+    # Force one eligible update to skip resampling; it still gets a duration.
+    monkeypatch.setattr(node.pf, 'resample', lambda **kwargs: False)
+    node.localized = False
+    c.step(lap()[0])
+    assert node.resampling_count == before[0]
+    assert node.last_pf_update_time > before[2]
+
+
+def test_diagnostics_timer_publishes_stationary_with_paused_ros_clock(car):
+    import time
+    from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+
+    c = car(use_sim_time=True)
+    node = c.node
+    c.stand(lap()[0], n=16)
+    assert node.localized
+    updates = node.updates
+    received = []
+    topic = node.diagnostics_pub.topic_name
+    assert topic != '/mcl/diagnostics'
+    sub = node.create_subscription(DiagnosticArray, topic, received.append, 1)
+    # A different node/run can publish this shared topic in the caller's domain.
+    # Ignore global arguments so the test Car's remap does not affect this publisher.
+    foreign = rclpy.create_node('foreign_mcl_diagnostics', use_global_arguments=False)
+    pub = foreign.create_publisher(DiagnosticArray, '/mcl/diagnostics', 1)
+    assert pub.topic_name == '/mcl/diagnostics'
+    shared_received = []
+    foreign.create_subscription(DiagnosticArray, '/mcl/diagnostics', shared_received.append, 1)
+    conflicting = DiagnosticArray(status=[DiagnosticStatus(values=[
+        KeyValue(key='particle_count', value='17'), KeyValue(key='localized', value='false')])])
+    try:
+        assert node.diagnostics_timer.timer_period_ns == 1_000_000_000
+        assert node.get_clock().now().nanoseconds == 0  # no /clock publisher
+        deadline = time.monotonic() + 5.0
+        while len(received) < 2 and time.monotonic() < deadline:
+            pub.publish(conflicting)
+            rclpy.spin_once(foreign, timeout_sec=0)
+            rclpy.spin_once(node, timeout_sec=.1)
+        assert len(received) >= 2
+        assert any(v.key == 'particle_count' and v.value == '17'
+                   for msg in shared_received for status in msg.status for v in status.values)
+        for msg in received:
+            values = {v.key: v.value for v in msg.status[0].values}
+            assert values['localized'] == 'true'
+            assert int(values['particle_count']) == node.pf.n
+            assert float(values['pf_update_age_sec']) >= 0
+        assert node.updates == updates  # publication needs no scans or motion
+    finally:
+        node.destroy_subscription(sub)
+        foreign.destroy_node()
+
+
+def test_ros_particle_bounds_match_experimental_source_config(car):
+    from pathlib import Path
+    import yaml
+
+    config = Path(__file__).resolve().parents[1] / 'config' / 'mcl.yaml'
+    params = yaml.safe_load(config.read_text())['mcl']['ros__parameters']
+    c = car()
+    assert c.node.pf.min_particles == params['min_particles'] == 300
+    assert c.node.pf.max_particles == params['max_particles'] == 2000

@@ -5,7 +5,8 @@ Started by mcl.launch.py. Same outputs as localization.launch.py:
   TF map -> odom      the filter's pose in the map composed with the inverse of odom -> base_link
   /localized_pose     PoseStamped in 'map' (base_link = rear axle), published at /odom rate, and only while
                       localized, so pure pursuit does not drive before that (as with localization_gate)
-Extra: /mcl/particles (PoseArray), /map (OccupancyGrid, latched) for Foxglove.
+Extra: /mcl/particles (PoseArray), /map (OccupancyGrid, latched) for Foxglove,
+/mcl/diagnostics (DiagnosticArray, 1 Hz, including while stationary).
 
   find:      the car finds itself with a global scan-matching search (ScanMatcher), in a worker thread (the pose
              and TF keep flowing): at the start, after a sim reset, and when lost. Hybrid: first only near the
@@ -60,8 +61,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import rclpy
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
@@ -151,12 +154,21 @@ class MclNode(Node):
 
         self.lmap = LikelihoodMap.from_yaml(os.path.join(track_dir(track), 'map.yaml'),
                                             max_dist=p('max_dist', 2.0).value)
+        self.force_adaptive_resample = p('force_adaptive_resample', False).value
         self.pf = ParticleFilter(
+            adaptive_particles=p('adaptive_particles', True).value,
+            min_particles=p('min_particles', 300).value, max_particles=p('max_particles', 2000).value,
+            pf_err=p('pf_err', 0.05).value, pf_z=p('pf_z', 0.99).value,
+            kld_bin_xy=p('kld_bin_xy', 0.20).value, kld_bin_yaw=p('kld_bin_yaw', 0.10).value,
             n=p('particles', 1000).value, seed=p('seed', -1).value, sigma_hit=p('sigma_hit', 0.15).value,
             z_hit=p('z_hit', 0.8).value, z_rand=p('z_rand', 0.2).value,
             likelihood_scale=p('likelihood_scale', 0.4).value,
             noise_x=tuple(p('noise_x', [0.10, 0.02]).value), noise_y=tuple(p('noise_y', [0.05, 0.05]).value),
             noise_yaw=tuple(p('noise_yaw', [0.05, 0.10]).value))
+        self.recovery_min_particles = p('recovery_min_particles', 1000).value
+        if (not np.isfinite(self.recovery_min_particles) or self.recovery_min_particles < 1
+                or int(self.recovery_min_particles) != self.recovery_min_particles):
+            raise ValueError('recovery_min_particles must be a positive integer')
         self.matcher = ScanMatcher(self.lmap)
         self.hybrid = False
         raceline = os.path.join(track_dir(track), 'raceline.csv')
@@ -207,6 +219,9 @@ class MclNode(Node):
         self.anchor_log_t = 0.0
         self.hold_until = 0.0         # monotonic time until which local searches do not re-anchor (a burst)
         self.burst = False            # a burst of re-anchors: a background global search is due
+        self.resampling_count = 0
+        self.last_pf_update_duration_ms = None
+        self.last_pf_update_time = None  # perf_counter, independent of ROS/simulator time
         self.updates = 0
         self.warn_t = 0.0
 
@@ -215,6 +230,7 @@ class MclNode(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.pose_pub = self.create_publisher(PoseStamped, '/localized_pose', 10)
         self.particles_pub = self.create_publisher(PoseArray, '/mcl/particles', 1)
+        self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/mcl/diagnostics', 1)
         map_pub = self.create_publisher(OccupancyGrid, '/map', LATCHED)
         self.publish_map(map_pub)
 
@@ -225,10 +241,53 @@ class MclNode(Node):
         self.create_subscription(Odometry, '/odom', self.odom_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self.scan_cb, qos_profile_sensor_data)
         self.create_timer(0.05, self.tick)
+        self.diagnostics_timer = self.create_timer(
+            1.0, self.publish_diagnostics, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.get_logger().info(f'{self.pf.n} particles on {self.lmap.w}x{self.lmap.h} map '
                                f'({self.lmap.res:.3f} m), {len(self.matcher.candidates)} search positions'
                                + (f', {self.matcher.track_poses} raceline-first poses' if self.hybrid else
                                   ', no raceline-first search') + ', waiting for /odom and /scan')
+
+    def publish_diagnostics(self):
+        """Snapshot the current cloud at 1 Hz; this never changes localization state.
+
+        Missing/nonfinite scalar measurements use 'unavailable', not numeric zero.
+        Cloud statistics describe retained particles even while localization is lost.
+        """
+        neff = position_std = yaw_std = None
+        if (self.initialized and np.isfinite(self.pf.p).all()
+                and np.isfinite(self.pf.w).all()):
+            try:
+                neff = self.pf.neff()
+                position_std, yaw_std = self.pf.spread()
+            except (ArithmeticError, ValueError):
+                pass  # diagnostics must survive invalid numeric cloud statistics
+
+        def measurement(value):
+            return str(value) if value is not None and math.isfinite(value) else 'unavailable'
+
+        age = (None if self.last_pf_update_time is None else
+               max(0.0, time.perf_counter() - self.last_pf_update_time))
+        status = DiagnosticStatus()
+        status.name = 'mcl/localization'
+        status.level = DiagnosticStatus.OK if self.localized else DiagnosticStatus.WARN
+        status.message = ('localized' if self.localized else
+                          'not localized' if self.initialized else 'waiting for initialization')
+        status.values = [KeyValue(key=key, value=value) for key, value in [
+            ('particle_count', str(self.pf.n)),
+            ('effective_sample_size', measurement(neff)),
+            ('localized', str(self.localized).lower()),
+            ('position_std_m', measurement(position_std)),
+            ('yaw_std_rad', measurement(yaw_std)),
+            ('resampling_count', str(self.resampling_count)),
+            ('pf_update_duration_ms', measurement(self.last_pf_update_duration_ms)),
+            ('initialized', str(self.initialized).lower()),
+            ('pf_update_age_sec', measurement(age)),
+        ]]
+        msg = DiagnosticArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.status = [status]
+        self.diagnostics_pub.publish(msg)
 
     # ---------------- setup ----------------
     def publish_map(self, pub):
@@ -242,16 +301,21 @@ class MclNode(Node):
         msg.data = self.lmap.occupancy_grid().tolist()
         pub.publish(msg)
 
-    def init_filter(self, pose, reason, keep_localized=False, quiet=False, matched=False, odom=None):
+    def init_filter(self, pose, reason, keep_localized=False, quiet=False, matched=False, odom=None, recovery=False):
         """Cloud around pose. matched: a scan-matched pose, known to a few cm, so a tighter cloud (a loose one
         never tightens along a featureless straight while the car stands, and the car would wait forever).
         keep_localized: a re-anchor while driving (always matched), the car does not stop for it. odom: the
         odometry pose that pose belongs to (default the newest): a pose matched to a scan belongs to the
         odometry at the scan's stamp, up to the lidar latency older (tagged with the newest, every re-anchor put
-        the filter speed x latency behind the car)."""
+        the filter speed x latency behind the car).
+        recovery: global pose selection or broad /initialpose; raise the adaptive
+        population floor without changing the existing Gaussian widths or state gates.
+        Ordinary local re-anchors deliberately retain the current population.
+        """
         odom = odom if odom is not None else self.odom[0]
         k = 0.3 if keep_localized or matched else 1.0
-        self.pf.init_gaussian(pose, k * self.init_std_xy, k * self.init_std_yaw)
+        self.pf.init_gaussian(pose, k * self.init_std_xy, k * self.init_std_yaw,
+                              min_particles=self.recovery_min_particles if recovery else None)
         if not keep_localized:
             self.localized = False
             self.good = 0
@@ -406,13 +470,18 @@ class MclNode(Node):
         moved = trans >= self.update_min_d or abs(delta[2]) >= self.update_min_a
         if not moved and self.localized:
             return
+        pf_started = time.perf_counter()
         if moved:   # before localizing, scans are used while standing still: the start pose is known
             self.pf.predict(delta)
             self.last_odom_pose = odom_pose
         self.pf.update_sensor(ranges, angles, sensor, self.lmap)
-        self.pf.resample()
+        if self.pf.resample(force=self.pf.adaptive_particles and self.force_adaptive_resample):
+            self.resampling_count += 1
         self.map_T_odom = compose(self.pf.estimate(), inverse(odom_pose))
-        self.check_localized(*self.pf.spread())
+        spread = self.pf.spread()
+        self.last_pf_update_time = time.perf_counter()
+        self.last_pf_update_duration_ms = (self.last_pf_update_time - pf_started) * 1000.0
+        self.check_localized(*spread)
         if self.localized and self.search is None:
             self.check_fit(ranges, angles, sensor, odom_pose)
         if self.localized and self.alternatives is not None and self.search is None:
@@ -550,7 +619,7 @@ class MclNode(Node):
             return
         pose, alternatives, how = choice
         self.init_filter(compose(pose, moved), f'{self.search}: found the car in {ms:.0f} ms ({how}'
-                         + (', near the raceline; verifying' if stage == 'raceline' else '') + ')', matched=True)
+                         + (', near the raceline; verifying' if stage == 'raceline' else '') + ')', matched=True, recovery=True)
         if alternatives:
             self.alternatives = Alternatives([compose(a, moved) for a in alternatives], self.odom[0],
                                              evidence=self.validate_evidence, distance=self.validate_distance)
@@ -572,7 +641,7 @@ class MclNode(Node):
             self.get_logger().warning(f'verify: the whole-area search puts the car '
                                       f'{math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m away ({choice[2]}, '
                                       f'{ms:.0f} ms): moving it there')
-            self.init_filter(pose, 'verify', keep_localized=self.localized, quiet=True, matched=True)
+            self.init_filter(pose, 'verify', keep_localized=self.localized, quiet=True, matched=True, recovery=True)
             others = [est] + [compose(a, moved) for a in choice[1]]
         else:
             tied = [h[0] for h in hyps if hyps and h[1] >= self.ambiguity * hyps[0][1]]
@@ -628,7 +697,7 @@ class MclNode(Node):
         self.relocation = None
         self.get_logger().warning(f'relocated {math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m by a global '
                                   f'search, confirmed by the one before ({ms:.0f} ms, {choice[2]})')
-        self.init_filter(pose, 'relocate', keep_localized=True, quiet=True)
+        self.init_filter(pose, 'relocate', keep_localized=True, quiet=True, recovery=True)
 
     def make_unsure(self):
         """After a guess (or a switch, or a verify that found other places): until a whole-area search finds the
@@ -675,7 +744,7 @@ class MclNode(Node):
             self.get_logger().warning(f'the guess was wrong: switching {math.hypot(pose[0] - est[0], pose[1] - est[1]):.2f} m '
                                       f'to another place that fits clearly better (by {evidence:.1f} fit x updates '
                                       f'over {alt.travelled:.1f} m)')
-            self.init_filter(pose, 'switch', keep_localized=True, quiet=True, odom=odom_pose)
+            self.init_filter(pose, 'switch', keep_localized=True, quiet=True, odom=odom_pose, recovery=True)
             self.alternatives = Alternatives(others, odom_pose, evidence=self.validate_evidence,
                                              distance=self.validate_distance)
             self.make_unsure()
@@ -865,7 +934,7 @@ class MclNode(Node):
         if self.odom is None:
             self.get_logger().warning('/initialpose before /odom: ignored')
             return
-        self.init_filter(pose2d(msg.pose.pose), '/initialpose')
+        self.init_filter(pose2d(msg.pose.pose), '/initialpose', recovery=True)
 
     def tick(self):
         """After a reset: search for the car once it has settled."""
