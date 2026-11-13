@@ -1,7 +1,9 @@
 KLD particle adaptation
 =======================
 
-The ROS node/config enable experimental adaptation by default. The reusable
+The ROS node/config enable experimental adaptation by default, with bounds
+300–2000 validated in AutoDRIVE. The reusable filter constructor retains its
+200-particle minimum for explicit algorithm experiments and historical benchmarks. The reusable
 ParticleFilter constructor defaults to fixed mode for compatibility. In adaptive
 mode the initial `particles` count is clamped to min/max. Global recovery uses
 `recovery_min_particles` (experimental default 1000), capped at max_particles and

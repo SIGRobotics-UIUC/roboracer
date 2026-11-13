@@ -851,3 +851,135 @@ def test_recovery_callers_raise_population_but_local_reanchors_do_not(car, event
     assert node.pf.w == pytest.approx(np.full(expected, 1 / expected))
     assert node.pf.p.shape == (expected, 3)
     assert node.localized == (event not in ('find', 'initialpose'))
+
+
+def test_diagnostics_values_unavailable_zero_and_current_cloud(car):
+    from diagnostic_msgs.msg import DiagnosticStatus
+
+    c = car()
+    node = c.node
+    messages = []
+    node.diagnostics_pub.publish = messages.append
+
+    def snapshot():
+        node.publish_diagnostics()
+        assert len(messages[-1].status) == 1
+        status = messages[-1].status[0]
+        assert status.name == 'mcl/localization'
+        return status, {v.key: v.value for v in status.values}
+
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.WARN
+    assert values['initialized'] == values['localized'] == 'false'
+    assert int(values['particle_count']) == node.pf.n
+    assert values['resampling_count'] == '0'
+    for key in ('effective_sample_size', 'position_std_m', 'yaw_std_rad',
+                'pf_update_duration_ms', 'pf_update_age_sec'):
+        assert values[key] == 'unavailable'
+
+    node.odom_cb(c.odom((1.45, 1.45, 0)))
+    node.init_filter((1.45, 1.45, 0), 'test', quiet=True)
+    node.pf.init_gaussian((1.45, 1.45, 0), 0, 0)
+    node.pf.resample(force=True)  # direct test setup, not a node update
+    node.localized = True
+    node.last_pf_update_duration_ms = 0.0  # available zero must not become unavailable
+    node.resampling_count = 7
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.OK
+    assert values['initialized'] == values['localized'] == 'true'
+    assert int(values['particle_count']) == node.pf.n
+    assert float(values['effective_sample_size']) == pytest.approx(node.pf.neff())
+    assert float(values['position_std_m']) == pytest.approx(0, abs=1e-12)
+    assert float(values['yaw_std_rad']) == pytest.approx(node.pf.spread()[1])
+    assert float(values['pf_update_duration_ms']) == 0
+    assert int(values['resampling_count']) == 7
+    node.pf.p[:, 0] += np.linspace(0, .2, node.pf.n)
+    node.pf.w = np.arange(1, node.pf.n + 1, dtype=float)
+    node.pf.w /= node.pf.w.sum()
+    particles, weights = node.pf.p.copy(), node.pf.w.copy()
+    rng_state = node.pf.rng.bit_generator.state
+    _, values = snapshot()
+    assert float(values['effective_sample_size']) == pytest.approx(node.pf.neff())
+    assert float(values['position_std_m']) == pytest.approx(node.pf.spread()[0])
+    assert float(values['yaw_std_rad']) == pytest.approx(node.pf.spread()[1])
+    np.testing.assert_array_equal(node.pf.p, particles)
+    np.testing.assert_array_equal(node.pf.w, weights)
+    assert node.pf.rng.bit_generator.state == rng_state
+    node.reset_cb(String(data='test'))
+    status, values = snapshot()
+    assert status.level == DiagnosticStatus.WARN
+    assert values['localized'] == 'false'
+    assert values['resampling_count'] == '7'  # lifetime count survives reset/recovery
+    node.init_filter((1.45, 1.45, 0), 'test recovery', quiet=True, recovery=True)
+    assert node.resampling_count == 7
+    _, values = snapshot()
+    assert int(values['particle_count']) == node.pf.n
+    node.pf.w[:] = np.nan
+    _, values = snapshot()
+    for key in ('effective_sample_size', 'position_std_m', 'yaw_std_rad'):
+        assert values[key] == 'unavailable'
+
+
+def test_diagnostics_count_actual_resamples_and_time_only_completed_updates(car, monkeypatch):
+    c = car(force_adaptive_resample=True)
+    node = c.node
+    outcomes = []
+    resample = node.pf.resample
+
+    def recorded_resample(*args, **kwargs):
+        result = resample(*args, **kwargs)
+        outcomes.append(result)
+        return result
+
+    monkeypatch.setattr(node.pf, 'resample', recorded_resample)
+    c.stand(lap()[0], n=16)
+    assert node.localized
+    assert node.resampling_count == sum(outcomes) > 0
+    assert node.last_pf_update_duration_ms is not None
+    assert node.last_pf_update_duration_ms >= 0
+    before = (node.resampling_count, node.last_pf_update_duration_ms, node.last_pf_update_time)
+    c.step(lap()[0])  # stationary localized scan skips PF work
+    assert (node.resampling_count, node.last_pf_update_duration_ms, node.last_pf_update_time) == before
+    # Force one eligible update to skip resampling; it still gets a duration.
+    monkeypatch.setattr(node.pf, 'resample', lambda **kwargs: False)
+    node.localized = False
+    c.step(lap()[0])
+    assert node.resampling_count == before[0]
+    assert node.last_pf_update_time > before[2]
+
+
+def test_diagnostics_timer_publishes_stationary_with_paused_ros_clock(car):
+    import time
+    from diagnostic_msgs.msg import DiagnosticArray
+
+    c = car(use_sim_time=True)
+    node = c.node
+    c.stand(lap()[0], n=16)
+    assert node.localized
+    updates = node.updates
+    received = []
+    sub = node.create_subscription(DiagnosticArray, '/mcl/diagnostics', received.append, 1)
+    assert node.diagnostics_timer.timer_period_ns == 1_000_000_000
+    assert node.get_clock().now().nanoseconds == 0  # no /clock publisher
+    deadline = time.monotonic() + 5.0
+    while len(received) < 2 and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=.1)
+    assert len(received) >= 2
+    for msg in received:
+        values = {v.key: v.value for v in msg.status[0].values}
+        assert values['localized'] == 'true'
+        assert int(values['particle_count']) == node.pf.n
+        assert float(values['pf_update_age_sec']) >= 0
+    assert node.updates == updates  # publication needs no scans or motion
+    node.destroy_subscription(sub)
+
+
+def test_ros_particle_bounds_match_experimental_source_config(car):
+    from pathlib import Path
+    import yaml
+
+    config = Path(__file__).resolve().parents[1] / 'config' / 'mcl.yaml'
+    params = yaml.safe_load(config.read_text())['mcl']['ros__parameters']
+    c = car()
+    assert c.node.pf.min_particles == params['min_particles'] == 300
+    assert c.node.pf.max_particles == params['max_particles'] == 2000

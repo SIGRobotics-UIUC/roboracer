@@ -3,7 +3,7 @@ mcl:
   ros__parameters:
     # particles: set by the launch argument particles:= (default 1000; ~2000 is fine for numpy at 40 Hz scans)
     adaptive_particles: true  # experimental KLD mode; false retains fixed systematic MCL
-    min_particles: 200
+    min_particles: 300      # experimental default validated in AutoDRIVE with max_particles=2000
     max_particles: 2000
     recovery_min_particles: 1000  # adaptive global recovery floor, capped at max_particles; not local re-anchors
     pf_err: 0.05               # KLD approximation error

@@ -5,7 +5,8 @@ Started by mcl.launch.py. Same outputs as localization.launch.py:
   TF map -> odom      the filter's pose in the map composed with the inverse of odom -> base_link
   /localized_pose     PoseStamped in 'map' (base_link = rear axle), published at /odom rate, and only while
                       localized, so pure pursuit does not drive before that (as with localization_gate)
-Extra: /mcl/particles (PoseArray), /map (OccupancyGrid, latched) for Foxglove.
+Extra: /mcl/particles (PoseArray), /map (OccupancyGrid, latched) for Foxglove,
+/mcl/diagnostics (DiagnosticArray, 1 Hz, including while stationary).
 
   find:      the car finds itself with a global scan-matching search (ScanMatcher), in a worker thread (the pose
              and TF keep flowing): at the start, after a sim reset, and when lost. Hybrid: first only near the
@@ -60,8 +61,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import rclpy
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
@@ -154,7 +157,7 @@ class MclNode(Node):
         self.force_adaptive_resample = p('force_adaptive_resample', False).value
         self.pf = ParticleFilter(
             adaptive_particles=p('adaptive_particles', True).value,
-            min_particles=p('min_particles', 200).value, max_particles=p('max_particles', 2000).value,
+            min_particles=p('min_particles', 300).value, max_particles=p('max_particles', 2000).value,
             pf_err=p('pf_err', 0.05).value, pf_z=p('pf_z', 0.99).value,
             kld_bin_xy=p('kld_bin_xy', 0.20).value, kld_bin_yaw=p('kld_bin_yaw', 0.10).value,
             n=p('particles', 1000).value, seed=p('seed', -1).value, sigma_hit=p('sigma_hit', 0.15).value,
@@ -216,6 +219,9 @@ class MclNode(Node):
         self.anchor_log_t = 0.0
         self.hold_until = 0.0         # monotonic time until which local searches do not re-anchor (a burst)
         self.burst = False            # a burst of re-anchors: a background global search is due
+        self.resampling_count = 0
+        self.last_pf_update_duration_ms = None
+        self.last_pf_update_time = None  # perf_counter, independent of ROS/simulator time
         self.updates = 0
         self.warn_t = 0.0
 
@@ -224,6 +230,7 @@ class MclNode(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.pose_pub = self.create_publisher(PoseStamped, '/localized_pose', 10)
         self.particles_pub = self.create_publisher(PoseArray, '/mcl/particles', 1)
+        self.diagnostics_pub = self.create_publisher(DiagnosticArray, '/mcl/diagnostics', 1)
         map_pub = self.create_publisher(OccupancyGrid, '/map', LATCHED)
         self.publish_map(map_pub)
 
@@ -234,10 +241,53 @@ class MclNode(Node):
         self.create_subscription(Odometry, '/odom', self.odom_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self.scan_cb, qos_profile_sensor_data)
         self.create_timer(0.05, self.tick)
+        self.diagnostics_timer = self.create_timer(
+            1.0, self.publish_diagnostics, clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.get_logger().info(f'{self.pf.n} particles on {self.lmap.w}x{self.lmap.h} map '
                                f'({self.lmap.res:.3f} m), {len(self.matcher.candidates)} search positions'
                                + (f', {self.matcher.track_poses} raceline-first poses' if self.hybrid else
                                   ', no raceline-first search') + ', waiting for /odom and /scan')
+
+    def publish_diagnostics(self):
+        """Snapshot the current cloud at 1 Hz; this never changes localization state.
+
+        Missing/nonfinite scalar measurements use 'unavailable', not numeric zero.
+        Cloud statistics describe retained particles even while localization is lost.
+        """
+        neff = position_std = yaw_std = None
+        if (self.initialized and np.isfinite(self.pf.p).all()
+                and np.isfinite(self.pf.w).all()):
+            try:
+                neff = self.pf.neff()
+                position_std, yaw_std = self.pf.spread()
+            except (ArithmeticError, ValueError):
+                pass  # diagnostics must survive invalid numeric cloud statistics
+
+        def measurement(value):
+            return str(value) if value is not None and math.isfinite(value) else 'unavailable'
+
+        age = (None if self.last_pf_update_time is None else
+               max(0.0, time.perf_counter() - self.last_pf_update_time))
+        status = DiagnosticStatus()
+        status.name = 'mcl/localization'
+        status.level = DiagnosticStatus.OK if self.localized else DiagnosticStatus.WARN
+        status.message = ('localized' if self.localized else
+                          'not localized' if self.initialized else 'waiting for initialization')
+        status.values = [KeyValue(key=key, value=value) for key, value in [
+            ('particle_count', str(self.pf.n)),
+            ('effective_sample_size', measurement(neff)),
+            ('localized', str(self.localized).lower()),
+            ('position_std_m', measurement(position_std)),
+            ('yaw_std_rad', measurement(yaw_std)),
+            ('resampling_count', str(self.resampling_count)),
+            ('pf_update_duration_ms', measurement(self.last_pf_update_duration_ms)),
+            ('initialized', str(self.initialized).lower()),
+            ('pf_update_age_sec', measurement(age)),
+        ]]
+        msg = DiagnosticArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.status = [status]
+        self.diagnostics_pub.publish(msg)
 
     # ---------------- setup ----------------
     def publish_map(self, pub):
@@ -420,13 +470,18 @@ class MclNode(Node):
         moved = trans >= self.update_min_d or abs(delta[2]) >= self.update_min_a
         if not moved and self.localized:
             return
+        pf_started = time.perf_counter()
         if moved:   # before localizing, scans are used while standing still: the start pose is known
             self.pf.predict(delta)
             self.last_odom_pose = odom_pose
         self.pf.update_sensor(ranges, angles, sensor, self.lmap)
-        self.pf.resample(force=self.pf.adaptive_particles and self.force_adaptive_resample)
+        if self.pf.resample(force=self.pf.adaptive_particles and self.force_adaptive_resample):
+            self.resampling_count += 1
         self.map_T_odom = compose(self.pf.estimate(), inverse(odom_pose))
-        self.check_localized(*self.pf.spread())
+        spread = self.pf.spread()
+        self.last_pf_update_time = time.perf_counter()
+        self.last_pf_update_duration_ms = (self.last_pf_update_time - pf_started) * 1000.0
+        self.check_localized(*spread)
         if self.localized and self.search is None:
             self.check_fit(ranges, angles, sensor, odom_pose)
         if self.localized and self.alternatives is not None and self.search is None:
