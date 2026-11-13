@@ -7,6 +7,7 @@ and a stretch the map does not have (a low fit never stops it).
 """
 import math
 import threading
+import uuid
 
 import numpy as np
 import pytest
@@ -47,7 +48,9 @@ class Car:
 
     def __init__(self, lmap, **params):
         args = ['--ros-args', '-p', 'track:=synth', '-p', 'seed:=1', '-p', 'publish_particles:=false',
-                '-p', 'search_period:=0.0', '-p', 'search_period_max:=0.0', '-p', 'debounce:=0.0']
+                '-p', 'search_period:=0.0', '-p', 'search_period_max:=0.0', '-p', 'debounce:=0.0',
+                # Each Car owns its diagnostics transport, even in a shared ROS domain.
+                '-r', f'/mcl/diagnostics:=/test_mcl_{uuid.uuid4().hex}/diagnostics']
         for k, v in params.items():
             args += ['-p', f'{k}:={v}']
         rclpy.init(args=args)
@@ -963,7 +966,7 @@ def test_diagnostics_count_actual_resamples_and_time_only_completed_updates(car,
 
 def test_diagnostics_timer_publishes_stationary_with_paused_ros_clock(car):
     import time
-    from diagnostic_msgs.msg import DiagnosticArray
+    from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
     c = car(use_sim_time=True)
     node = c.node
@@ -971,20 +974,38 @@ def test_diagnostics_timer_publishes_stationary_with_paused_ros_clock(car):
     assert node.localized
     updates = node.updates
     received = []
-    sub = node.create_subscription(DiagnosticArray, '/mcl/diagnostics', received.append, 1)
-    assert node.diagnostics_timer.timer_period_ns == 1_000_000_000
-    assert node.get_clock().now().nanoseconds == 0  # no /clock publisher
-    deadline = time.monotonic() + 5.0
-    while len(received) < 2 and time.monotonic() < deadline:
-        rclpy.spin_once(node, timeout_sec=.1)
-    assert len(received) >= 2
-    for msg in received:
-        values = {v.key: v.value for v in msg.status[0].values}
-        assert values['localized'] == 'true'
-        assert int(values['particle_count']) == node.pf.n
-        assert float(values['pf_update_age_sec']) >= 0
-    assert node.updates == updates  # publication needs no scans or motion
-    node.destroy_subscription(sub)
+    topic = node.diagnostics_pub.topic_name
+    assert topic != '/mcl/diagnostics'
+    sub = node.create_subscription(DiagnosticArray, topic, received.append, 1)
+    # A different node/run can publish this shared topic in the caller's domain.
+    # Ignore global arguments so the test Car's remap does not affect this publisher.
+    foreign = rclpy.create_node('foreign_mcl_diagnostics', use_global_arguments=False)
+    pub = foreign.create_publisher(DiagnosticArray, '/mcl/diagnostics', 1)
+    assert pub.topic_name == '/mcl/diagnostics'
+    shared_received = []
+    foreign.create_subscription(DiagnosticArray, '/mcl/diagnostics', shared_received.append, 1)
+    conflicting = DiagnosticArray(status=[DiagnosticStatus(values=[
+        KeyValue(key='particle_count', value='17'), KeyValue(key='localized', value='false')])])
+    try:
+        assert node.diagnostics_timer.timer_period_ns == 1_000_000_000
+        assert node.get_clock().now().nanoseconds == 0  # no /clock publisher
+        deadline = time.monotonic() + 5.0
+        while len(received) < 2 and time.monotonic() < deadline:
+            pub.publish(conflicting)
+            rclpy.spin_once(foreign, timeout_sec=0)
+            rclpy.spin_once(node, timeout_sec=.1)
+        assert len(received) >= 2
+        assert any(v.key == 'particle_count' and v.value == '17'
+                   for msg in shared_received for status in msg.status for v in status.values)
+        for msg in received:
+            values = {v.key: v.value for v in msg.status[0].values}
+            assert values['localized'] == 'true'
+            assert int(values['particle_count']) == node.pf.n
+            assert float(values['pf_update_age_sec']) >= 0
+        assert node.updates == updates  # publication needs no scans or motion
+    finally:
+        node.destroy_subscription(sub)
+        foreign.destroy_node()
 
 
 def test_ros_particle_bounds_match_experimental_source_config(car):
