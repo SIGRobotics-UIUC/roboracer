@@ -24,6 +24,8 @@ setup(
         'console_scripts': [
             'build_raceline = planning.build_raceline:main',
             'obstacle_spliner_node = planning.obstacle_spliner_node:main',
+            'frenet_state_node = planning.frenet_state_node:main',
+            'fake_opponent_node = planning.fake_opponent_node:main',
         ],
     },
 )
