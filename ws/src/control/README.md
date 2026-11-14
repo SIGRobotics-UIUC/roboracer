@@ -185,9 +185,12 @@ ros2 launch control wall_follow.launch.py speed:=1.0 debug:=true     # on its ow
 | `lookahead` | `0.8` | m ahead at which the wall distances are projected |
 | `beam_angle_deg` | `45` | angle between the side beam and the forward beam |
 | `max_range` | `5.0` | m, a side with no return within this has no wall |
-| `track_width` | `1.2` | m, initial guess only: the width is measured whenever both walls are in view (`width_alpha` `0.2` smoothing) |
+| `track_width` | `1.2` | m, initial guess only: the width is measured whenever both walls are in view, nearly parallel to the car and the wall ahead is beyond the turn start (`width_alpha` `0.2` smoothing) |
+| `width_max_angle_deg` | `20.0` | deg, walls angled more than this (corners, a hairpin's outside wall ahead) do not update the width |
 | `turn_start_widths`, `turn_full_widths` | `1.0`, `0.5` | wall ahead within this many track widths: start turning towards the open side, full lock (floors `min_turn_full` `0.5` m, `min_turn_span` `0.3` m) |
-| `open_angle_deg` | `60` | beams that compare how open the two sides are |
+| `open_min_deg`, `open_max_deg` | `20`, `110` | each side's beams between these angles compare how open the two sides are (mean range) |
+| `hairpin_open_widths` | `1.0` | a hairpin starts when the side range on the open side exceeds this many track widths (the inside wall has ended) with the wall ahead within the hairpin start |
+| `hairpin_start_widths`, `hairpin_full_widths` | `2.5`, `1.5` | in a hairpin, the wall-ahead distances (track widths) at which the turn starts and reaches full lock; its side is held until the way ahead is clear; the start is capped at `hairpin_max_start` (`3.5` m) |
 | `front_slow_widths`, `front_min_factor` | `1.05`, `0.4` | wall ahead within this many track widths: slow down, to this fraction of `speed` |
 | `corner_slowdown` | `0.5` | fraction of `speed` shed at full steering |
 | `max_steering_angle` | `0.524` | rad, steering is clipped to this; `wall_follow.launch.py` loads it from `config/vehicle.yaml` |

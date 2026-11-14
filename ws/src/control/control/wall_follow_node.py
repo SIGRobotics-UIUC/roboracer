@@ -14,6 +14,7 @@ Subscribes /scan (sensor_msgs/LaserScan) and pose_topic (geometry_msgs/PoseStamp
 publishes /drive (ackermann_msgs/AckermannDriveStamped). Used by scripts/map_track.sh --wall-follow.
 """
 import math
+import signal
 import time
 
 import numpy as np
@@ -82,6 +83,19 @@ class TrackWidth:
         return self.width
 
 
+def measures_width(alpha_left, alpha_right, front, clear_distance, max_angle):
+    """Whether this scan's wall distances measure the track width: both walls seen and nearly parallel to the car
+    (wall angles in rad, None: not seen), and the wall straight ahead no closer than clear_distance.
+
+    Approaching a hairpin's outside wall, the side beams hit that wall ahead: both "walls" closed in and the
+    width read 2.0 -> 0.5 m (SRL 2025 ICRA's first hairpin). The turn distances scale with the width, so the
+    corner turn faded out (half lock -> 0) as the car reached the wall and it drove straight into it.
+    """
+    if alpha_left is None or alpha_right is None:
+        return False
+    return front >= clear_distance and abs(alpha_left) <= max_angle and abs(alpha_right) <= max_angle
+
+
 def centring_error(d_left, d_right, width):
     """How far the car is right of the centre [m] (positive: steer left), from the wall distances
     (None: not visible). With one wall it holds half the track width from it; with none, 0 (straight on)."""
@@ -119,6 +133,31 @@ def corner_turn(front, open_left, open_right, start_distance, full_distance):
     return urgency * (1.0 if open_left > open_right else -1.0)
 
 
+def side_openness(ranges, angles, lo, hi):
+    """Mean range over the beams lo..hi rad to the left and to the right (angles positive left): how open each
+    side is. Single beams at +/-60 deg both hit a hairpin's rounded outside wall at about the same range, and the
+    turn picked a side by noise (SRL 2025 ICRA: right, then left at 0.8 m from the wall); a sector also sees
+    the opening where the inside wall ends."""
+    left = ranges[(angles >= lo) & (angles <= hi)]
+    right = ranges[(angles <= -lo) & (angles >= -hi)]
+    return (float(left.mean()) if left.size else 0.0), (float(right.mean()) if right.size else 0.0)
+
+
+def hairpin_side(active, open_side, open_range, front, width, open_widths, start_distance):
+    """The side (+1 left, -1 right) of a hairpin being turned into, or 0 for none.
+
+    A hairpin starts when the inside wall has ended beside the car: the perpendicular range on the open side
+    exceeds open_widths track widths, with the wall ahead within start_distance. Its side then stays fixed until
+    the way ahead is clear again: mid-turn the perpendicular beam meets the return lane's outside wall, and
+    dropping the hairpin there unwound the steering halfway round.
+    """
+    if active and front < start_distance:
+        return active
+    if front < start_distance and open_range > open_widths * width:
+        return open_side
+    return 0
+
+
 def rate_limit(previous, target, max_rate, dt):
     """target, moved from previous by at most max_rate * dt (no limit without a previous command, a positive
     dt or a positive max_rate)."""
@@ -144,6 +183,9 @@ class WallFollower(Node):
         self.max_range = p('max_range', 5.0).value                # beyond this a side counts as "no wall"
         # m: initial track width, until both walls have been seen; then it is measured as the car drives
         self.width = TrackWidth(p('track_width', 1.2).value, p('width_alpha', 0.2).value)
+        # measure the width only where both walls are within this angle of parallel to the car (and the wall
+        # ahead is beyond the turn start): corners and a wall ahead otherwise read as a narrower track
+        self.width_max_angle = math.radians(p('width_max_angle_deg', 20.0).value)
         # Distances to the wall ahead, in track widths (the measured width): what is "close" depends on the
         # track. Tuned on Berlin (2.4 m): start turning at 2.4 m, full lock at 1.2 m, slow from 2.5 m; the same
         # metres on Porto (~1.3 m wide) put ordinary corners at full lock and made the car jerky.
@@ -157,7 +199,19 @@ class WallFollower(Node):
         # PD overcorrecting made the steering snap in tight corners. The sim's servo turns at ~3.2 rad/s.
         self.max_steer_rate = p('max_steer_rate', 1.5).value
         self.prev_steer = None
-        self.open_angle = math.radians(p('open_angle_deg', 60.0).value)  # beams that compare the two sides
+        # beams between these angles on each side compare how open the two sides are (the turn goes to the more open)
+        self.open_min = math.radians(p('open_min_deg', 20.0).value)
+        self.open_max = math.radians(p('open_max_deg', 110.0).value)
+        # A hairpin (the inside wall ends beside the car, wall ahead): a U-turn needs the turn to start there, long
+        # before the usual distances, which scale with the track width (SRL 2025 ICRA's top-left hairpin, 1.35 m
+        # lane: the wall ahead was 3.2 m away where the turn had to start; it began at 1.35 m and hit the wall).
+        self.hairpin_open_widths = p('hairpin_open_widths', 1.0).value    # inside wall "ended": side range > this
+        self.hairpin_start_widths = p('hairpin_start_widths', 2.5).value  # start turning, wall ahead in widths
+        self.hairpin_full_widths = p('hairpin_full_widths', 1.5).value    # ... full lock
+        # m, cap on the hairpin start: on wide tracks 2.5 widths reaches the scan's max_range, so "the way ahead is
+        # clear again" (which ends the hairpin) could never come
+        self.hairpin_max_start = p('hairpin_max_start', 3.5).value
+        self.hairpin = 0    # side of the hairpin being turned into (+1 left, -1 right), 0 for none
         self.corner_slowdown = p('corner_slowdown', 0.5).value    # fraction of speed shed at full steering
         self.max_steer = p('max_steering_angle', 0.524).value     # rad, steering is clipped to this; default mirrors
                                                                   # config/vehicle.yaml, which wall_follow.launch.py loads
@@ -191,20 +245,25 @@ class WallFollower(Node):
         return float(np.median(window)) if window.size else self.max_range
 
     def wall_distance(self, msg, ranges, side):
-        """Distance to the wall on one side (side = +1 left, -1 right), projected lookahead metres ahead.
+        """Distance to the wall on one side (side = +1 left, -1 right), projected lookahead metres ahead, and
+        the wall's angle relative to the car (rad, positive when the wall falls away ahead).
 
         Classic two-beam method: b is perpendicular to the car, a is beam_angle further forward.
-        alpha is the wall's angle relative to the car; positive when the wall falls away ahead.
-        Returns None if either beam sees no wall.
+        Returns (None, None) if either beam sees no wall.
         """
         theta = self.beam_angle
         b = self.range_at(msg, ranges, side * math.pi / 2)
         a = self.range_at(msg, ranges, side * (math.pi / 2 - theta))
         if a >= self.max_range or b >= self.max_range:
-            return None
+            return None, None
         alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
         # negative once the wall curves across the car's path (a hairpin's outside): it is right there
-        return max(0.0, b * math.cos(alpha) + self.lookahead * math.sin(alpha))
+        return max(0.0, b * math.cos(alpha) + self.lookahead * math.sin(alpha)), alpha
+
+    def turn_distances(self, width):
+        """Distances to the wall ahead [m] at which the corner turn starts and reaches full lock."""
+        full = max(self.min_turn_full, self.turn_full_widths * width)
+        return max(full + self.min_turn_span, self.turn_start_widths * width), full
 
     def scan_callback(self, msg):
         if self.done:
@@ -213,11 +272,14 @@ class WallFollower(Node):
         ranges[~np.isfinite(ranges)] = self.max_range       # no return -> "far"
         ranges = np.clip(ranges, 0.0, self.max_range)
 
-        d_left = self.wall_distance(msg, ranges, +1)
-        d_right = self.wall_distance(msg, ranges, -1)
+        d_left, alpha_left = self.wall_distance(msg, ranges, +1)
+        d_right, alpha_right = self.wall_distance(msg, ranges, -1)
+        front = self.range_at(msg, ranges, 0.0)
 
         # Error: how far the car is right of centre (positive -> steer left, which is positive steering)
-        width = self.width.update(d_left, d_right)
+        width = self.width.width
+        if measures_width(alpha_left, alpha_right, front, self.turn_distances(width)[0], self.width_max_angle):
+            width = self.width.update(d_left, d_right)
         error = centring_error(d_left, d_right, width)
 
         # PD control, with the derivative from sensor timestamps. When a wall drops in or out of view
@@ -229,11 +291,17 @@ class WallFollower(Node):
             d_error = float(np.clip((error - self.prev_error) / (t - self.prev_time), -1.0, 1.0))
         self.prev_error, self.prev_time, self.prev_walls = error, t, walls
 
-        front = self.range_at(msg, ranges, 0.0)
-        full = max(self.min_turn_full, self.turn_full_widths * width)
-        start = max(full + self.min_turn_span, self.turn_start_widths * width)
-        turn = corner_turn(front, self.range_at(msg, ranges, self.open_angle),
-                           self.range_at(msg, ranges, -self.open_angle), start, full)
+        start, full = self.turn_distances(width)
+        angles = msg.angle_min + msg.angle_increment * np.arange(ranges.size)
+        open_left, open_right = side_openness(ranges, angles, self.open_min, self.open_max)
+        open_side = 1 if open_left > open_right else -1
+        hairpin_start = max(start, min(self.hairpin_start_widths * width, self.hairpin_max_start))
+        self.hairpin = hairpin_side(self.hairpin, open_side, self.range_at(msg, ranges, open_side * math.pi / 2),
+                                    front, width, self.hairpin_open_widths, hairpin_start)
+        if self.hairpin:
+            start, full = hairpin_start, min(max(full, self.hairpin_full_widths * width), hairpin_start - self.min_turn_span)
+            open_left, open_right = (1.0, 0.0) if self.hairpin > 0 else (0.0, 1.0)   # its side, held
+        turn = corner_turn(front, open_left, open_right, start, full)
         # the closer the wall ahead, the more the turn takes over from the centring: at a hairpin the inside
         # wall's tip reappears close on the inside and centring alone steered away from the turn
         pd = float(np.clip(self.kp * error + self.kd * d_error, -self.max_steer, self.max_steer))
@@ -253,7 +321,7 @@ class WallFollower(Node):
         if self.debug:
             fmt = lambda d: f'{d:.2f}' if d is not None else ' -- '  # noqa: E731
             self.get_logger().info(f'wall L {fmt(d_left)} R {fmt(d_right)}  width {width:.2f} m  front {front:.2f} m'
-                                   f'  turn {turn:+.2f}'
+                                   f'  turn {turn:+.2f}{" hairpin" if self.hairpin else ""}'
                                    f'  error {error:+.2f} m  d_error {d_error:+.2f}'
                                    f'  steer {steering:+.3f} rad  speed {speed:.2f} m/s', throttle_duration_sec=0.5)
 
@@ -289,6 +357,9 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.1)   # short waits so Ctrl+C is noticed even with no scans arriving
     except KeyboardInterrupt:
         pass
+    # ros2 launch forwards a second SIGINT after the terminal's: it interrupted stop() midway (a traceback, and
+    # the car left without its zero commands). Ignore further ones until the stops are out.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     node.stop()                 # always leave the car stopped
     node.destroy_node()
     rclpy.try_shutdown()
