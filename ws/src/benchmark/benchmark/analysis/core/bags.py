@@ -29,7 +29,9 @@ def load_run(run):
         dataset.warnings.append('No finalized readable bag; collection failed')
         return dataset
     reader = rosbag2_py.SequentialReader()
-    storage = yaml.safe_load((bag / 'metadata.yaml').read_text())['rosbag2_bagfile_information']['storage_identifier']
+    bag_info = yaml.safe_load((bag / 'metadata.yaml').read_text())['rosbag2_bagfile_information']
+    storage = bag_info['storage_identifier']
+    dataset.metadata['recording_duration_s'] = bag_info.get('duration', {}).get('nanoseconds', 0)/1e9
     reader.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id=storage),
                 rosbag2_py.ConverterOptions('', ''))
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}

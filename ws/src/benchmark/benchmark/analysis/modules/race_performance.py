@@ -82,7 +82,7 @@ def analyze(data, output, config):
         rows = np.loadtxt(data.assets['raceline.csv'], delimiter=';', comments='#', ndmin=2)
         projections, length = project_reference([s.value[:3] for s in pose], rows)
         good = projections[:, 4].astype(bool)
-        metrics['estimated_lateral_error'] = distribution(projections[good, 1], 'm (left positive)')
+        metrics['estimated_lateral_error'] = distribution(projections[good, 1], 'm (left positive)', magnitude_percentile=True)
         metrics['estimated_heading_error'] = distribution(projections[good, 2], 'rad (estimate minus reference)')
         metrics['estimated_absolute_lateral_error'] = distribution(abs(projections[good, 1]), 'm')
         metrics['estimated_absolute_heading_error'] = distribution(abs(projections[good, 2]), 'rad')
@@ -112,7 +112,7 @@ def analyze(data, output, config):
     if truth_map and rows is not None:
         projected, _ = project_reference([s.value[:3] for s in truth_map], rows)
         valid = projected[:, 4].astype(bool)
-        metrics['true_lateral_error'] = distribution(projected[valid, 1], 'm (left positive)')
+        metrics['true_lateral_error'] = distribution(projected[valid, 1], 'm (left positive)', magnitude_percentile=True)
         metrics['true_heading_error'] = distribution(projected[valid, 2], 'rad')
     else:
         metrics['true_lateral_error'] = metric(units='m', reason='Requires aligned ground truth and raceline')
@@ -151,7 +151,7 @@ def analyze(data, output, config):
         pixels = np.rint(grid.to_pixel([s.value[:2] for s in pose])).astype(int)
         inside = (pixels[:, 0] >= 0) & (pixels[:, 0] < grid.h) & (pixels[:, 1] >= 0) & (pixels[:, 1] < grid.w)
         values = distance[pixels[inside, 0], pixels[inside, 1]]
-        metrics['map_center_clearance'] = distribution(values, 'm')
+        metrics['map_center_clearance'] = distribution(values, 'm', lower_tail=True)
         metrics['minimum_map_center_clearance'] = metric(float(values.min()) if len(values) else None, 'm',
                                                          'No valid in-map pose samples')
         warnings.append('Map clearance is center-to-nonfree raster distance, not physical body clearance; '
@@ -163,20 +163,12 @@ def analyze(data, output, config):
                  else 'm/s' if 'speed' in name else '%' if name == 'native_track_completion' else None)
         metrics.setdefault(name, metric(units=units, reason='Required evidence unavailable: '+', '.join(evidence)))
         metrics[name]['required_evidence'] = list(evidence)
-    if rows is not None and pose:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots()
-        ax.plot(rows[:, 1], rows[:, 2], label='reference')
-        xy = np.array([s.value[:2] for s in pose])
-        ax.scatter(xy[:, 0], xy[:, 1], s=2, label='estimated pose')
-        ax.set(xlabel='map x [m]', ylabel='map y [m]', aspect='equal')
-        ax.legend()
-        fig.savefig(output/'track.png', dpi=130, bbox_inches='tight')
-        plt.close(fig)
-        figures.append({'path': 'track.png', 'caption': 'Estimated trajectory and preserved reference, map frame.'})
-    return {'status': 'ok', 'metrics': metrics, 'warnings': warnings, 'figures': figures}
+    from .race_view import payload
+    return {'status': 'ok', 'metrics': metrics, 'warnings': warnings, 'figures': figures,
+            'viewer': payload(data, rows, truth_map, config)}
 
 
-MODULE = Module('race_performance', '1.0', (), ('pose', 'odom', 'truth', 'lap_count', 'collision_count'), analyze)
+from .race_view import render_report
+
+
+MODULE = Module('race_performance', '1.0', (), ('pose', 'odom', 'truth', 'lap_count', 'collision_count'), analyze, render_report)

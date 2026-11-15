@@ -109,3 +109,29 @@ def test_recovery_is_explicit_exclusive_and_never_changes_original(tmp_path):
     assert recovered['stop_confirmation'] == 'unknown'
     with pytest.raises(ValueError):
         recover(args)
+
+
+def test_timestamp_run_prefix_collision_and_exact_ids(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from benchmark.collector import artifacts
+
+    class FrozenTime:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 11, 15, 4, 56, 26, 159100, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(artifacts, 'datetime', FrozenTime)
+    first = unique_directory(tmp_path, timestamp_prefix='porto')
+    second = unique_directory(tmp_path, timestamp_prefix='porto')
+    assert first.name == 'porto-20261115T045626.159100Z'
+    assert second.name == first.name+'-1'
+    assert first.is_dir() and second.is_dir()
+    assert unique_directory(tmp_path).name == '20261115T045626.159100Z'
+    assert unique_directory(tmp_path, 'exact').name == 'exact'
+    with pytest.raises(ValueError, match='already exists'):
+        unique_directory(tmp_path, 'exact')
+    with pytest.raises(ValueError):
+        unique_directory(tmp_path, timestamp_prefix='../escape')
+    with pytest.raises(ValueError, match='99 characters'):
+        unique_directory(tmp_path, timestamp_prefix='x'*100)
+    assert len(unique_directory(tmp_path, timestamp_prefix='x'*99).name) <= 128

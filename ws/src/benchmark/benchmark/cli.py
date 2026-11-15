@@ -3,20 +3,45 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import shlex
 
 from .collector.artifacts import finalize, unique_directory, utc, write_json
 from .collector.config import identifier, load
 
 
+def resolve_config(value):
+    """Prefer explicit files; resolve bare names in workspace then installed config."""
+    path = Path(value)
+    if path.is_file():
+        return path
+    if path.parent != Path('.') or path.suffix:
+        raise ValueError(f'Configuration file does not exist: {path}')
+    candidates = [Path.cwd()/'src/benchmark/config'/f'{path.name}.yaml',
+                  Path.cwd()/'ws/src/benchmark/config'/f'{path.name}.yaml']
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        candidates.append(Path(get_package_share_directory('benchmark'))/'config'/f'{path.name}.yaml')
+    except (ImportError, LookupError):
+        pass
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise ValueError('Configuration not found; searched: '+', '.join(map(str, candidates)))
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--log-root', type=Path, default=Path.cwd()/'log')
+    p.add_argument('--log-root', type=Path, default=Path.cwd()/'benchmark_runs',
+                   help='Benchmark artifact root (default: ./benchmark_runs)')
     p.add_argument('--tracks-dir', type=Path, default=Path.cwd()/'tracks')
     sub = p.add_subparsers(dest='command', required=True)
     run = sub.add_parser('run')
-    run.add_argument('--config', required=True, type=Path)
-    run.add_argument('--run-id')
+    run.add_argument('--config', required=True, type=Path, help='YAML path or config name, e.g. porto')
+    run.add_argument('--run-id', type=identifier,
+                     help='Run ID prefix; a UTC timestamp is appended automatically')
     run.add_argument('--set', action='append', default=[])
+    run.add_argument('--analyze', action='store_true',
+                     help='Generate a report after the collection is finalized, including aborted runs')
     sub.add_parser('status')
     sub.add_parser('stop')
     analysis = sub.add_parser('analyze')
@@ -30,6 +55,33 @@ def parser():
     return p
 
 
+def generate_report(log_root, run_id, analysis_id=None, modules='all', max_gap_s=0.1):
+    """Use the existing analyzer and label its output artifacts for terminal users."""
+    from .analysis.runner import analyze
+    from .collector.progress import say
+    say(f'Analyzing run {run_id}; generating report…')
+    output = Path(analyze(log_root, run_id, analysis_id, modules,
+                          {'max_gap_s': max_gap_s})).resolve()
+    say(f'Report generated in: {output}')
+    say(f'View HTML report at: {output / "report.html"}')
+    say(f'Metrics JSON: {output / "metrics.json"}')
+    return output
+
+
+def collection_finished(log_root, run_id, analyze=False):
+    """Called only after sealing and cleaning up the collection."""
+    if analyze:
+        generate_report(log_root, run_id)
+    else:
+        from .collector.progress import say
+        command = shlex.join(['benchmark', 'analyze', run_id])
+        say('Generate a report with:\n  '+command)
+        if Path(log_root).resolve() != (Path.cwd()/'benchmark_runs').resolve():
+            say('Custom artifact root: pass --log-root '+shlex.quote(str(Path(log_root).resolve()))+
+                ' before analyze.')
+        say('Tip: add --analyze to benchmark run to generate the report automatically.')
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
@@ -37,13 +89,15 @@ def main(argv=None):
             import math
             if not math.isfinite(args.max_gap_s) or args.max_gap_s <= 0:
                 raise ValueError('--max-gap-s must be finite and positive')
-            from .analysis.runner import analyze
-            print(analyze(args.log_root, args.run_id, args.analysis_id, args.modules,
-                          {'max_gap_s': args.max_gap_s}))
+            generate_report(args.log_root, args.run_id, args.analysis_id, args.modules, args.max_gap_s)
         elif args.command == 'run':
+            args.config = resolve_config(args.config)
+            from .collector.progress import say
+            say(f'Configuration: {args.config.resolve()}')
             config = load(args.config, args.set)
             from .collector.manager import run
-            return run(config, args)
+            return run(config, args, on_finalized=lambda run_id:
+                       collection_finished(args.log_root, run_id, args.analyze))
         elif args.command == 'recover':
             recover(args)
         else:

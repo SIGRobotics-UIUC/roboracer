@@ -33,10 +33,19 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def unique_directory(root, explicit=None):
+def unique_directory(root, explicit=None, *, timestamp_prefix=None):
+    if explicit is not None and timestamp_prefix is not None:
+        raise ValueError('Choose an exact identifier or a timestamp prefix, not both')
+    if timestamp_prefix is not None:
+        identifier(timestamp_prefix)
+        # Reserve room for the timestamp and largest collision suffix.
+        if len(timestamp_prefix) > 99:
+            raise ValueError('Run ID prefix must be at most 99 characters')
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     stem = identifier(explicit) if explicit else datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    if timestamp_prefix is not None:
+        stem = timestamp_prefix+'-'+stem
     for suffix in range(10000):
         path = root / (stem if suffix == 0 else f'{stem}-{suffix}')
         try:
@@ -55,6 +64,7 @@ def git_snapshot(workspace, output):
         return subprocess.check_output(['git', '-c', f'safe.directory={workspace}', '-C', str(workspace), *args], stderr=subprocess.PIPE)
     try:
         commit = git('rev-parse', 'HEAD').decode().strip()
+        branch = git('rev-parse', '--abbrev-ref', 'HEAD').decode().strip()
         status = git('status', '--porcelain=v1', '-z')
         (output / 'status.bin').write_bytes(status)
         (output / 'tracked.patch').write_bytes(git('diff', '--binary', 'HEAD'))
@@ -70,7 +80,7 @@ def git_snapshot(workspace, output):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
             names.append({'path': name, 'sha256': digest(target)})
-        return {'commit': commit, 'dirty': bool(status), 'untracked': names,
+        return {'commit': commit, 'branch': branch, 'dirty': bool(status), 'untracked': names,
                 'tracked_patch_sha256': digest(output / 'tracked.patch')}
     except (subprocess.CalledProcessError, OSError, ValueError) as exc:
         return {'available': False, 'reason': str(exc)}

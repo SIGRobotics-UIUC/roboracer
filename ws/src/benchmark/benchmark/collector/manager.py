@@ -20,7 +20,8 @@ class Abort(RuntimeError):
     pass
 
 
-def run(config, args):
+def run(config, args, *, on_finalized=None):
+    from .progress import say, lap_message, result_message
     import rclpy
     from rclpy.node import Node
     from rclpy.signals import SignalHandlerOptions
@@ -65,6 +66,7 @@ def run(config, args):
                     'bridge automatic respawn events use restricted telemetry. No new ground-truth feedback is added.',
                 'simulator_metadata': config['metadata'], 'commands': [], 'process_results': {}}
     run_path = None
+    finalized = False
     processes = {}
     collection_lock = None
     measuring = False
@@ -79,6 +81,15 @@ def run(config, args):
     status_pub = node.create_publisher(String, '/benchmark/status', latched)
 
     def event(kind, **fields):
+        messages = {
+            'reset_requested': 'Requesting simulator reset; waiting for its reset event.',
+            'measurement_start': 'Warm-up finished. Measurement lap 1 is starting; warm-up laps are excluded.',
+            'motion_inhibit': 'Stopping: command gate inhibited; sending stops and checking wheel odometry.',
+            'stop_procedure_complete': 'Stop procedure finished: '+str(fields.get('confirmation', 'unknown')),
+            'abort': 'Run interrupted: '+str(fields.get('reason', 'unknown')),
+        }
+        if kind in messages:
+            say(messages[kind])
         record = {'event': kind, 'utc': utc(), 'monotonic_ns': time.monotonic_ns(),
                   'transport_ns': node.get_clock().now().nanoseconds, **fields}
         events.publish(String(data=json.dumps(record, allow_nan=False)))
@@ -161,6 +172,7 @@ def run(config, args):
                 last_status = time.monotonic()
 
     def launch(name, command):
+        say(f'Starting {name}; process log: {run_path / (name+".log")}')
         env = {**os.environ, 'TRACKS_DIR': str(args.tracks_dir)}
         processes[name] = Process(command, run_path/(name+'.log'), env)
         metadata['commands'].append({'role': name, 'argv': command})
@@ -206,12 +218,20 @@ def run(config, args):
             raise Abort('multiple_controller_request_publishers')
 
     def wait(predicate, label):
+        say(f'Waiting for {label.replace("_", " ") } (up to {limits["startup_s"]:g} s).')
         deadline = time.monotonic()+limits['startup_s']
+        next_update = time.monotonic()+5
         while time.monotonic() < deadline:
             spin()
             check()
             if predicate():
+                say(f'Ready: {label.replace("_", " ")}.')
                 return
+            if time.monotonic() >= next_update:
+                missing = sorted(health.missing(time.monotonic()))
+                say('Still waiting for '+label.replace('_', ' ')+
+                    (('; missing inputs: '+', '.join(missing)) if missing else '.'))
+                next_update = time.monotonic()+5
         raise Abort('readiness_timeout:'+label)
 
     def finish_pending_lap():
@@ -228,6 +248,7 @@ def run(config, args):
             metadata['measurement']['laps'].append({'index': index-warmup, 'time_s': duration,
                 'start_kind': 'initial_partial_or_standing' if index == 1 else 'flying',
                 'valid': valid_lap, 'association': 'native counter/time associated after 0.25 s; no common frame ID'})
+        say(lap_message(index, warmup, config['experiment']['laps'], duration, valid_lap))
         event('lap_observed', native_count=pending['counter'], time_s=duration, valid=valid_lap)
         pending = None
 
@@ -274,6 +295,9 @@ def run(config, args):
         metadata['stop_mode'] = latest.get('gate', (None, {}))[1].get('stop_mode', 'unknown')
 
     try:
+        say(f'Setting up race on {config["experiment"]["map"]}: '
+            f'{warmup} warm-up laps (excluded), {config["experiment"]["laps"]} measured laps.')
+        say('Preflight: checking existing publishers, bridge clock and saved track assets.')
         # Allow discovery before touching reset or command ownership.
         spin(1.0)
         if node.get_publishers_info_by_topic('/drive'):
@@ -309,10 +333,14 @@ def run(config, args):
             required.append('map.pbstream')
         if any(not (track/name).is_file() for name in required):
             raise Abort('missing_track_assets:'+','.join(required))
-        run_path = unique_directory(args.log_root/'runs', args.run_id)
+        run_path = unique_directory(args.log_root/'runs', timestamp_prefix=args.run_id)
         collection_lock = (run_path/'collection.lock').open('x')
         fcntl.flock(collection_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         event_stream = (run_path/'events.jsonl').open('x')
+        say(f'Run ID: {run_path.name}')
+        say(f'Raw collection directory (sealed on completion): {run_path}')
+        say(f'Lifecycle event log: {run_path / "events.jsonl"}')
+        say('Saving source and track/configuration snapshots before starting motion.')
         metadata['run_id'] = run_path.name
         metadata['git'] = git_snapshot(Path(os.environ.get('BENCHMARK_REPO_ROOT', Path.cwd())), run_path/'source')
         metadata['reproducibility_warnings'] = ([] if metadata['git'].get('commit') else
@@ -420,6 +448,8 @@ def run(config, args):
             metadata['measurement']['start_recorded_ns'] = node.get_clock().now().nanoseconds
             metadata['measurement']['start_monotonic_ns'] = time.monotonic_ns()
             metadata['measurement']['collision_baseline'] = collision0
+        say('Motion enabled. '+(f'Warm-up lap 1/{warmup} starting.' if warmup else
+            'Measurement lap 1 starting (initial lap may be partial or standing).'))
         event('motion_enable', warmup_laps=warmup)
         event('experiment_start')
         started = time.monotonic()
@@ -500,11 +530,17 @@ def run(config, args):
                 if any(process.group_alive() for process in processes.values()):
                     raise RuntimeError('Owned process still alive; preserving incomplete run without sealing')
                 finalize(run_path, metadata)
+                finalized = True
                 if collection_lock:
                     collection_lock.close()
                 state['status'] = metadata['status']
                 status_pub.publish(String(data=json.dumps({**state, 'run_id': run_path.name})))
+                say(result_message(metadata['status'], metadata['measurement']['completed_laps'],
+                    config['experiment']['laps'], metadata.get('failure'), metadata.get('stop_confirmation')))
+                say(f'Saved raw collection: {run_path}')
+                say(f'Failure/configuration details: {run_path / "metadata.json"}')
                 print(json.dumps({'run_id': run_path.name, 'status': metadata['status'],
+                                  'reason': metadata.get('failure'),
                                   'stop_confirmation': metadata.get('stop_confirmation'), 'path': str(run_path)}))
         finally:
             for process in processes.values():
@@ -519,6 +555,8 @@ def run(config, args):
             node.destroy_node()
             rclpy.try_shutdown()
             singleton.close()
+    if finalized and on_finalized is not None:
+        on_finalized(run_path.name)
     return 0 if metadata.get('status') == 'completed' else 1
 
 

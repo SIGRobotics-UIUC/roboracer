@@ -2,6 +2,7 @@
 build/
 install/
 log/
+ws/benchmark_runs/
 
 # Python
 *.pyc

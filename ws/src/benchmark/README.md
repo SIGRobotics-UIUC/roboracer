@@ -2,7 +2,7 @@
 
 This package separates collection from offline numerical analysis. It never
 imports or runs `ws/scripts/`. Existing algorithm launches and native AutoDRIVE
-interfaces remain in use. Generated artifacts live under **`ws/log/`**.
+interfaces remain in use. Generated artifacts live under **`ws/benchmark_runs/`**.
 
 ## Build and commands
 
@@ -24,10 +24,43 @@ ros2 run benchmark benchmark stop
 ros2 run benchmark benchmark analyze example-01 --analysis-id baseline --modules all
 ```
 
+`run --config porto` resolves `src/benchmark/config/porto.yaml` from the
+workspace root (or `ws/src/benchmark/config/porto.yaml` from the repository
+root), then the installed package's config directory. Existing explicit file
+paths take precedence. Setup/readiness, warm-up versus measured lap completion,
+stopping and final results are printed live. Process log paths and the sealed
+raw collection directory are labeled; the final JSON also includes the failure
+reason when a run aborts.
+
+Add `--analyze` to `run` to generate the report after the collection has been
+sealed and owned processes cleaned up:
+
+```bash
+ros2 run benchmark benchmark run --config porto --run-id porto --analyze
+```
+
+This also analyzes finalized aborted/stopped runs for diagnosis; collection
+failure still returns a nonzero exit status. Incomplete/unsealed runs are not
+analyzed automatically. Without `--analyze`, the terminal prints a ready-to-copy
+`benchmark analyze <id>` command with the full generated run ID. Custom
+artifact roots are called out separately with the required `--log-root` option. Analysis prints
+labeled paths for the report directory, HTML report, and metrics JSON.
+
 Global `--log-root` and `--tracks-dir` options precede the subcommand. Defaults
-are `./log` and `./tracks`; run from the workspace root. Explicit IDs are
-exclusive. Generated IDs use UTC with microseconds and collision suffixes.
+are `./benchmark_runs` and `./tracks`; run from the workspace root. `run --run-id porto`
+generates an ID such as `porto-20261115T045626.159100Z`. Without `--run-id`,
+the ID is just the UTC timestamp. Generated IDs use microseconds and add a
+numeric suffix on collision. Run ID prefixes may contain up to 99 characters.
+Analysis lookups use the full generated run ID; explicit analysis and recovery
+destination IDs remain exact and exclusive.
 Multiple analysis IDs coexist; neither raw runs nor reports are overwritten.
+
+Compose bind-mounts `./ws` to `/root/ws`, including `benchmark_runs/`. A report at
+`/root/ws/benchmark_runs/reports/<run_id>/<analysis_id>/report.html` in the
+container is available at `ws/benchmark_runs/reports/<run_id>/<analysis_id>/report.html`
+on your laptop. Open that host file in a browser; no image rebuild or additional
+mount is needed. Existing runs under `ws/log/` stay there; analyze them with
+`ros2 run benchmark benchmark --log-root /root/ws/log analyze <run_id>`.
 
 Start the normal bridge separately; the simulator must be connected on the
 selected track and in Autonomous mode. The benchmark cannot switch simulator
@@ -132,7 +165,7 @@ selection fails if unavailable.
 
 ## Preservation and analysis
 
-`log/runs/<run_id>/` contains configuration, source snapshots, assets, processes,
+`benchmark_runs/runs/<run_id>/` contains configuration, source snapshots, assets, processes,
 events, bag, recording-order index, final metadata, and integrity manifest.
 Finalization atomically creates `complete.json` and immediately removes write
 permissions. The framework refuses modification/reuse and verifies content
@@ -172,7 +205,7 @@ latencies are unavailable without the endpoint evidence listed in every JSON
 result. Arrival intervals are never substituted for computation durations.
 Control smoothness and tire dynamics remain deferred.
 
-Reports live in `log/reports/<run_id>/<analysis_id>/` with strict JSON and HTML.
+Reports live in `benchmark_runs/reports/<run_id>/<analysis_id>/` with strict JSON and HTML.
 Modules return generic metrics, warnings and static PNG/JPEG figures; custom
 HTML callbacks/interactive dependencies are excluded. Adding a registered module
 does not change collection or rendering. Exceptions are isolated per module.
@@ -200,3 +233,31 @@ track/controller/localizer/parameters, laps/collisions, stop confirmation,
 input stalls, disconnects and recording failures. Synthetic fixtures do not
 establish collision-free laps or physical stopping. See `VALIDATION.md` for the
 implementation's actual checks and limitations.
+
+Race Performance owns its offline viewer: SVG trajectories over an embedded
+occupancy-map PNG, and Plotly signal panels. The library is embedded in the
+HTML (no CDN or network required). Its map and signal plots share lap/time
+selection; click to pin and use Unpin to resume hover inspection. Signal legend clicks
+hide traces; selections persist across laps. Drag horizontally to zoom; signal
+panels share horizontal ranges. Groups and individual panels can collapse.
+Trajectory markers and readouts use aligned localized-pose timestamps, never
+nearest spatial neighbors. Gaps and ambiguous reference projections remain
+unavailable. Odometry yaw is not plotted in map coordinates without validated
+TF alignment; normalized actuator evidence remains in the core inventory.
+
+Modules can supply `Module.render_report(result)` to return their section HTML
+and scripts. Plotly is a Race Performance dependency, not a core requirement.
+`window.benchmarkReport` exposes `getSelection()`, `subscribe(callback)` (returns
+an unsubscribe function), and `requestSelection({lap, timestamp})`. Lap indices
+are zero-based; Race Performance timestamps are seconds relative to its stated
+source timestamp origin. Changing laps clears the timestamp. No track overlay
+extension is exposed until another implemented module requires it.
+
+The map stays beside the plots on wide displays. Trajectory source labels are
+fixed; only signal legends toggle traces. Map wheel zoom is independent of
+linked horizontal signal zoom. Cursor lines and trajectory markers update as
+DOM/SVG overlays instead of redrawing Plotly on each hover. Reference-distance
+wraps break signal lines. Signed lateral distributions retain signed means and
+medians, with explicitly named absolute P95/max magnitudes; vehicle-center
+clearance distributions report P5/min. Computation Timing is currently hidden
+from reports and excluded from the default `all` module selection.

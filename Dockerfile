@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # perception: Cartographer SLAM, robot_localization for the experimental IMU EKF
     ros-humble-cartographer-ros \
     ros-humble-slam-toolbox \
+    python3-plotly \
     ros-humble-robot-localization \
     # gevent from apt: pip can't build it on every platform
     python3-gevent python3-gevent-websocket \

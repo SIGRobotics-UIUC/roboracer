@@ -134,3 +134,90 @@ def test_module_isolation_skips_and_generic_custom_figures(tmp_path, monkeypatch
     document = (tmp_path/'report.html').read_text()
     assert 'good/custom.png' in document and '&lt;custom&gt;' in document and '&lt;unsafe&gt;' in document
     json.dumps(modules, allow_nan=False)
+
+
+def test_core_report_without_modules(tmp_path):
+    render(tmp_path, {'run_id': '<run>', 'analysis_id': 'analysis', 'modules': [],
+                     'experiment': {'status': 'aborted', 'failure': 'recorder_failure',
+                         'git': {'commit': 'abc123'},
+                         'config': {'experiment': {'map': 'Porto', 'laps': 5},
+                                    'components': {'online_planner': {'enabled': False}}},
+                         'measurement': {'completed_laps': 2}}})
+    document = (tmp_path/'report.html').read_text()
+    for expected in ('Benchmark Report', 'Experiment Config', 'Collected Data',
+                     '&lt;run&gt;', 'abc123', 'recorder_failure', 'Requested laps',
+                     'Completed laps', 'Online planner</dt><dd>None', '/scan',
+                     'benchmarkReport', 'requestSelection'):
+        assert expected in document
+    assert 'Race Performance' not in document
+
+
+def test_module_report_entry_point(tmp_path, monkeypatch):
+    from benchmark.analysis.core import results
+    module = Module('custom', '1', (), (), lambda *args: {},
+                    render_report=lambda result: '<section id="custom">Owned view</section>')
+    monkeypatch.setattr(results, 'REGISTRY', {'custom': module})
+    render(tmp_path, {'modules': [{'name': 'custom', 'status': 'ok'}]})
+    assert 'Owned view' in (tmp_path/'report.html').read_text()
+
+
+def test_race_view_payload_alignment_partial_lap_and_strict_json(tmp_path):
+    from benchmark.analysis.modules.race_view import payload, render_report
+    rows = np.array([[0,0,0,-np.pi/2,0,2], [2,2,0,0,0,2],
+                     [4,2,2,np.pi/2,0,2], [6,0,2,np.pi,0,2]])
+    pose = [sample(t, [x,0,0], frame='map', order=i) for i,(t,x) in
+            enumerate([(1,.1),(1.05,.2),(1.1,.3),(2,.4)])]
+    data = Dataset(signals={'pose':pose, 'odom':[sample(1., [0,0,0,1,0,0])]}, metadata={
+        'config':{'components':{'controller':{'managed':False}}}})
+    view = payload(data, rows, [], {'max_gap_s':.1})
+    assert len(view['laps']) == 1 and not view['laps'][0]['complete']
+    assert view['signals']['Wheel odometry speed|m/s|Motion and commands|Speed'][0] == 1
+    assert view['signals']['Wheel odometry speed|m/s|Motion and commands|Speed'][1] is None
+    assert not view['samples'][-1]['continuous']
+    assert not any('Effective spatial' in k for k in view['signals'])
+    json.dumps(view, allow_nan=False)
+    document = render_report({'viewer':view, 'metrics':{}})
+    assert 'Plotly.newPlot' in document and 'plotly_click' in document
+    assert 'requestSelection' in document and 'drawMap' in document
+
+
+def test_error_magnitude_percentile_and_clearance_lower_tail():
+    from benchmark.analysis.core.results import distribution
+    lateral = distribution([-10, -.2, -.1, .1], 'm', magnitude_percentile=True)['value']
+    assert lateral['p95_absolute'] == pytest.approx(np.percentile([10,.2,.1,.1],95))
+    assert lateral['mean'] < 0 and 'p95' not in lateral
+    clearance = distribution([.01,.1,1,2], 'm', lower_tail=True)['value']
+    assert clearance['min'] == .01 and clearance['p5'] < .1
+    assert 'max' not in clearance and 'p95' not in clearance
+
+
+def test_collected_data_does_not_flag_logging_exclusions(tmp_path):
+    from benchmark.collector.topics import BASE, EXTRA
+    render(tmp_path, {'modules': [], 'experiment': {
+        'config': {'logging': {'level':'basic'}, 'components': {'controller': {'params': {'speed_scale': .5}}}},
+        'git': {'branch': 'benchmark-v1', 'commit': 'abcdef123456789'},
+        'recorder': {'closed':True, 'counts':dict.fromkeys([*BASE, *EXTRA], 10)},
+        'recording_duration_s':10}})
+    doc=(tmp_path/'report.html').read_text()
+    assert 'Recording available' in doc
+    assert 'Missing required inputs' not in doc
+    assert 'Not collected at this logging level' in doc
+    assert 'benchmark-v1' in doc and 'abcdef1</code>' in doc
+    assert 'data-commit="abcdef123456789"' in doc
+    assert 'speed scale' in doc
+    assert '<details><summary>Full recording inventory' in doc
+    assert '<details><summary>Provenance and saved evidence' in doc
+
+
+def test_occupancy_map_payload_is_raster_with_origin(tmp_path):
+    from PIL import Image
+    from benchmark.analysis.modules.race_view import payload
+    Image.new('L', (3, 2), 255).save(tmp_path/'map.png')
+    (tmp_path/'map.yaml').write_text('image: map.png\nresolution: 0.1\norigin: [1, 2, 0.5]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n')
+    rows=np.array([[0,0,0,-np.pi/2,0,2],[2,2,0,0,0,2],
+                   [4,2,2,np.pi/2,0,2],[6,0,2,np.pi,0,2]])
+    view=payload(Dataset(signals={'pose':[sample(1,[1,2,0])]},
+                         assets={'map.yaml':tmp_path/'map.yaml'}),rows,[],{})
+    assert view['map']['image'].startswith('data:image/png;base64,')
+    assert view['map']['origin'] == [1,2,.5]
+    assert view['map']['width'] == 3 and view['map']['height'] == 2

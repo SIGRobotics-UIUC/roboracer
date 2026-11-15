@@ -19,8 +19,8 @@ def analyze(log_root, run_id, analysis_id=None, modules='all', config=None):
     for module in (race_performance.MODULE, computation_timing.MODULE):
         if module.name not in REGISTRY:
             register(module)
-    names = list(REGISTRY) if modules == 'all' else modules.split(',')
-    if not names or len(set(names)) != len(names) or any(name not in REGISTRY for name in names):
+    names = [name for name in REGISTRY if name != 'computation_timing'] if modules == 'all' else [] if modules in ('none', '') else modules.split(',')
+    if len(set(names)) != len(names) or any(name not in REGISTRY for name in names):
         raise ValueError('Unknown analysis module selection')
     config = config or {'max_gap_s': 0.1}
     output = unique_directory(Path(log_root) / 'reports' / run_id, analysis_id)

@@ -9,7 +9,7 @@ services:
       - "4567:4567"   # AutoDRIVE bridge
       - "8765:8765"   # Foxglove
     volumes:
-      - ./ws:/root/ws
+      - ./ws:/root/ws         # includes benchmark_runs/; HTML reports are accessible on the host
       - ./:/repository:ro     # reproducible Git/source snapshots for benchmark runs
       - ./.bash_aliases:/root/.bash_aliases:ro
     working_dir: /root/ws

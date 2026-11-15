@@ -8,7 +8,7 @@
 - Optional mapping backend: `slam_mapping.launch.py` runs async SLAM Toolbox plus `slam_mapping_pose` (native pose relay and online trajectory). `save_slam_map` stages native `.posegraph`/`.data` and uses `slam_graph_tools` to export a consistent final map/trajectory; it does not create a Cartographer pbstream or use simulator ground truth.
 - `planning`: offline centerline/width extraction and TUM minimum-time raceline generation; optional runtime `obstacle_spliner_node` for stationary obstacles absent from the map. TUM runs in a separate venv through subprocess/CSV exchange.
 - `control`: pure pursuit with adaptive lookahead, reactive follow-the-gap, centering wall follower, and experimental disparity-gap follower. `race.launch.py` orchestrates localization, pure pursuit, and optional avoidance.
-- `benchmark`: managed collection with an independent command gate/rosbag2 recorder, plus offline race/timing analysis. Artifacts use `ws/log/runs/` and `ws/log/reports/`; never execute/import `ws/scripts/` from this package. See its README and VALIDATION.md for supported adapters and unvalidated simulator behavior.
+- `benchmark`: managed collection with an independent command gate/rosbag2 recorder, plus offline race/timing analysis. Artifacts use `ws/benchmark_runs/runs/` and `ws/benchmark_runs/reports/`; never execute/import `ws/scripts/` from this package. See its README and VALIDATION.md for supported adapters and unvalidated simulator behavior.
 - Read `docs/pipeline.md`, relevant launch/config files, and neighboring tests before editing. Keep changes scoped; preserve working interfaces and validated behavior.
 
 ## Environment and commands
@@ -111,7 +111,7 @@ ROS_DOMAIN_ID=42 python3 -m pytest src/control/test/test_lookahead.py src/planni
 
 - `ws/tracks/<name>/` is generated and git-ignored. Preserve validated maps, pbstreams, mapping trajectories, racelines, previews, provenance, and useful logs. Do not delete/overwrite them as cleanup or regenerate them silently.
 - Use new track names, temporary directories, or explicit `TRACKS_DIR`/planner `--tracks-dir` for experiments. Re-planning overwrites generated planning outputs: copy a validated track before experimenting unless replacement is requested.
-- Keep generated `ws/build`, `ws/install`, `ws/log`, and track outputs out of commits. Preserve committed test fixtures; create test outputs in temporary directories.
+- Keep generated `ws/build`, `ws/install`, `ws/log`, `ws/benchmark_runs`, and track outputs out of commits. Preserve committed test fixtures; create test outputs in temporary directories.
 - Preserve CSV formats, map-frame geometry, and driving direction. TUM raceline `psi_rad` uses yaw minus pi/2; do not treat it as ROS yaw. Keep existing working defaults and safety behavior unless the task explicitly changes them.
 
 ## Simulator ground truth: prohibited inputs and review debt
@@ -137,7 +137,7 @@ ROS_DOMAIN_ID=42 python3 -m pytest src/control/test/test_lookahead.py src/planni
 
 - Start with AGENTS.md, the user-named files, and directly relevant neighboring code. Expand scope only when necessary.
 - Prefer targeted `rg` searches and bounded file reads over repository-wide dumps.
-- Exclude generated directories from routine searches: ws/build/, ws/install/, ws/log/, .idea/, __pycache__/, and .pytest_cache/.
+- Exclude generated directories from routine searches: ws/build/, ws/install/, ws/log/, ws/benchmark_runs/, .idea/, __pycache__/, and .pytest_cache/.
 - Treat ws/tracks/ as experiment data. Read only explicitly relevant track artifacts; never modify validated tracks without approval.
 - When debugging a specific run, inspect its named log and report files rather than all historical runs.
 - Do not read large .pbstream, .posegraph, .data, .pgm, or image files as text; use appropriate parsers or metadata inspection when needed.

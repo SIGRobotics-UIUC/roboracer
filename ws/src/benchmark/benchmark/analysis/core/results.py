@@ -11,13 +11,16 @@ def metric(value=None, units=None, reason=None, **extra):
             **({'reason': reason} if reason and value is None else {}), **extra}
 
 
-def distribution(values, units):
+def distribution(values, units, *, lower_tail=False, magnitude_percentile=False):
     a = np.asarray(values, dtype=float)
     a = a[np.isfinite(a)]
     if not len(a):
         return metric(units=units, reason='No valid samples')
+    tail = ({'p5': float(np.percentile(a, 5)), 'min': float(a.min())} if lower_tail else
+            {'p95_absolute': float(np.percentile(abs(a), 95)), 'max_absolute': float(abs(a).max())}
+            if magnitude_percentile else {'p95': float(np.percentile(a, 95)), 'max': float(a.max())})
     return metric({'count': int(len(a)), 'mean': float(a.mean()), 'median': float(np.median(a)),
-                   'p95': float(np.percentile(a, 95)), 'max': float(a.max())}, units)
+                   **tail}, units)
 
 
 @dataclass
@@ -27,6 +30,7 @@ class Module:
     required: tuple
     optional: tuple
     analyze: object
+    render_report: object = None
 
 
 REGISTRY = {}
