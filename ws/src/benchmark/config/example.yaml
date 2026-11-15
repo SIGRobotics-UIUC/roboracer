@@ -1,10 +1,10 @@
 experiment:
-  map: iros26
+  map: Porto
   laps: 5
   warmup_laps: 1
 components:
   localization:
-    type: cartographer
+    type: mcl
     params: {}
   controller:
     type: map

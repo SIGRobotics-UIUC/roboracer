@@ -90,6 +90,8 @@ def load_run(run):
             valid = valid and frame == expected
         if name == 'odom':
             valid = valid and frame == 'odom' and message.child_frame_id == 'base_link'
+        if name == 'truth':
+            valid = valid and message.child_frame_id == SIGNAL_MAP['truth']['child_frame']
         sample = Sample(stamp, received, value, frame, sequence, segment,
                         metadata.get('clock_domain', 'unknown'), valid, received_monotonic_ns)
         raw.setdefault(name, []).append(sample)

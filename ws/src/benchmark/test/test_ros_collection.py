@@ -99,7 +99,7 @@ def simulator(tmp_path):
                 state['last_lap'] = time.monotonic()
         pubs[NS+'lap_count'].publish(Int32(data=state['lap']))
         pubs[NS+'collision_count'].publish(Int32(data=state['collision']))
-        pubs[NS+'last_lap_time'].publish(Float32(data=.5))
+        pubs[NS+'last_lap_time'].publish(Float32(data=.5 if state['lap'] else float('inf')))
     node.create_timer(.02, tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
     track = tmp_path/'tracks'/'synthetic'
     track.mkdir(parents=True)

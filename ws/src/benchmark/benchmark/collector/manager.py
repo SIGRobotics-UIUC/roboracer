@@ -220,13 +220,15 @@ def run(config, args):
             return
         index = pending['counter']-lap0
         lap_time = latest[NS+'last_lap_time']
+        finite_time = math.isfinite(lap_time[1].data)
+        duration = float(lap_time[1].data) if finite_time else None
         valid_lap = (pending['arrival']-0.1 <= lap_time[0] <= pending['arrival']+0.35
-                     and lap_time[1].data > 0)
+                     and finite_time and lap_time[1].data > 0)
         if index > warmup:
-            metadata['measurement']['laps'].append({'index': index-warmup, 'time_s': float(lap_time[1].data),
+            metadata['measurement']['laps'].append({'index': index-warmup, 'time_s': duration,
                 'start_kind': 'initial_partial_or_standing' if index == 1 else 'flying',
                 'valid': valid_lap, 'association': 'native counter/time associated after 0.25 s; no common frame ID'})
-        event('lap_observed', native_count=pending['counter'], time_s=float(lap_time[1].data), valid=valid_lap)
+        event('lap_observed', native_count=pending['counter'], time_s=duration, valid=valid_lap)
         pending = None
 
     def stop_vehicle():

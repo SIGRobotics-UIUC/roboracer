@@ -67,3 +67,6 @@ alias echo-drive="ros2 topic echo /drive"
 # ==============================================================================
 alias rnl="ros2 node list"
 alias rpl="ros2 param list"
+
+# Benchmark
+alias benchmark='ros2 run benchmark benchmark'

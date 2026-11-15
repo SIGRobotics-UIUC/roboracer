@@ -67,10 +67,10 @@ def analyze(data, output, config):
     metrics['lap_completion_fraction'] = metric(completed/requested if completed is not None and requested else None,
                                                'fraction', 'Requires lifecycle lap baseline and requested laps')
     laps = measured.get('laps', [])
-    valid_times = [lap['time_s'] for lap in laps if lap.get('valid') and lap.get('time_s', 0) > 0]
+    valid_times = [lap['time_s'] for lap in laps if lap.get('valid') and (lap.get('time_s') or 0) > 0]
     metrics['lap_time'] = distribution(valid_times, 's (native simulator)')
     metrics['flying_lap_time'] = distribution([lap['time_s'] for lap in laps if lap.get('valid')
-        and lap.get('start_kind') == 'flying' and lap.get('time_s', 0) > 0], 's (native simulator)')
+        and lap.get('start_kind') == 'flying' and (lap.get('time_s') or 0) > 0], 's (native simulator)')
     if 'collision_baseline' in measured and 'end_collision_count' in measured:
         delta = measured['end_collision_count']-measured['collision_baseline']
         metrics['collision_count'] = metric(delta if delta >= 0 else None, 'count', 'Counter reset invalidates collision delta')

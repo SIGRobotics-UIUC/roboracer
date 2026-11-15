@@ -8,6 +8,7 @@ rosbag2_py = pytest.importorskip('rosbag2_py')
 pytestmark = pytest.mark.skipif(os.environ.get('ROS_DISTRO') != 'humble', reason='Native bag fixtures target ROS 2 Humble')
 pytest.importorskip('geometry_msgs')
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from rclpy.serialization import serialize_message
 
 from benchmark.collector.artifacts import finalize
@@ -50,3 +51,29 @@ def test_native_bag_order_index_and_clock_reset(tmp_path, storage):
     sorted_first = [s.source_ns for s in data.signals['pose'] if s.segment == 0]
     assert sorted_first == [1_000_000_000, 1_030_000_000, 1_050_000_000, 1_050_000_000]
     assert any('duplicate' in w for w in data.warnings)
+
+
+def test_ground_truth_parent_and_child_frames_are_separate(tmp_path):
+    run = tmp_path/'truth'; run.mkdir()
+    writer = rosbag2_py.SequentialWriter()
+    writer.open(rosbag2_py.StorageOptions(uri=str(run/'bag'), storage_id='sqlite3'),
+                rosbag2_py.ConverterOptions('', ''))
+    topic = '/ground_truth/odom'
+    writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type='nav_msgs/msg/Odometry', serialization_format='cdr'))
+    with (run/'capture_index.jsonl').open('w') as index:
+        for sequence, child in enumerate(('ground_truth', 'wrong_child')):
+            message = Odometry()
+            message.header.stamp.sec = sequence+1
+            message.header.frame_id = 'world'
+            message.child_frame_id = child
+            message.pose.pose.orientation.w = 1.
+            raw = serialize_message(message)
+            stamp = (sequence+1)*10**9
+            writer.write(topic, raw, stamp)
+            index.write(json.dumps({'sequence': sequence, 'topic': topic, 'recorded_ns': stamp,
+                                    'sha256': hashlib.sha256(raw).hexdigest()})+'\n')
+    del writer
+    finalize(run, {'clock_domain': 'transport', 'config': {'logging': {'level': 'basic'}}})
+    samples = load_run(run).signals['truth']
+    assert samples[0].valid and samples[0].frame == 'world'
+    assert not samples[1].valid

@@ -4,12 +4,12 @@ import math
 import numpy as np
 
 NS = '/autodrive/roboracer_1/'
-SIGNAL_MAP_VERSION = 1
+SIGNAL_MAP_VERSION = 2
 SIGNAL_MAP = {
     'pose': {'topic': '/localized_pose', 'field': 'pose', 'units': 'm,rad', 'frame': 'map'},
     'tracked_pose': {'topic': '/tracked_pose', 'field': 'pose', 'units': 'm,rad', 'frame': 'map'},
-    'odom': {'topic': '/odom', 'field': 'pose.pose,twist.twist', 'units': 'm,rad,m/s,rad/s', 'frame': 'odom/base_link'},
-    'truth': {'topic': '/ground_truth/odom', 'field': 'pose.pose,twist.twist', 'units': 'm,rad,m/s,rad/s', 'frame': 'world/ground_truth'},
+    'odom': {'topic': '/odom', 'field': 'pose.pose,twist.twist', 'units': 'm,rad,m/s,rad/s', 'frame': 'odom', 'child_frame': 'base_link'},
+    'truth': {'topic': '/ground_truth/odom', 'field': 'pose.pose,twist.twist', 'units': 'm,rad,m/s,rad/s', 'frame': 'world', 'child_frame': 'ground_truth'},
     'drive': {'topic': '/drive', 'field': 'drive.speed,drive.steering_angle', 'units': 'm/s,rad', 'frame': 'base_link'},
     'requested_drive': {'topic': '/benchmark/requested_drive', 'field': 'drive.speed,drive.steering_angle', 'units': 'm/s,rad', 'frame': 'base_link'},
     'lap_count': {'topic': NS+'lap_count', 'field': 'data', 'units': 'count', 'frame': None},

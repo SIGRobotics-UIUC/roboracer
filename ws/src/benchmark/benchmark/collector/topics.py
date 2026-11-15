@@ -41,6 +41,10 @@ def stamp_ns(message):
 
 
 def valid(topic, message):
+    # Native AutoDRIVE sentinel before the first completed lap: stream is
+    # present, but a numerical lap duration is not available yet.
+    if topic == NS+'last_lap_time' and message.data == math.inf:
+        return True
     if topic in ('/localized_pose', '/tracked_pose'):
         return message.header.frame_id == 'map' and pose_value(message.pose) is not None
     if topic in ('/odom', '/ground_truth/odom'):

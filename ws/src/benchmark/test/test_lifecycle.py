@@ -6,6 +6,14 @@ import time
 
 from benchmark.collector.lifecycle import GatePolicy, Health, RestConfirmation
 from benchmark.collector.process import Process
+from benchmark.collector.topics import valid, NS
+
+
+def test_native_unset_lap_time_is_stream_presence_not_a_finite_measurement():
+    from types import SimpleNamespace
+    assert valid(NS+'last_lap_time', SimpleNamespace(data=float('inf')))
+    assert not valid(NS+'last_lap_time', SimpleNamespace(data=float('nan')))
+    assert not valid(NS+'throttle_command', SimpleNamespace(data=float('inf')))
 
 
 def test_jitter_tolerated_persistent_loss_not_fabricated():
