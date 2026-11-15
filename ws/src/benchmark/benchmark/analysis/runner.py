@@ -41,7 +41,8 @@ def analyze(log_root, run_id, analysis_id=None, modules='all', config=None):
                    'analysis_source': source,
                    'signal_map_version': SIGNAL_MAP_VERSION, 'signal_map': SIGNAL_MAP,
                    'sign_conventions': 'x forward, y left, yaw/steer positive left; angles radians',
-                   'experiment': data.metadata, 'warnings': data.warnings, 'modules': results,
+                   'experiment': data.metadata, 'signal_validation': data.shared.get('signal_validation', {}),
+                   'warnings': data.warnings, 'modules': results,
                    'status': 'failed' if any(m['status'] == 'failed' for m in results) else 'complete'}
         write_json(output / 'metrics.json', summary)
         render(output, summary)

@@ -78,6 +78,11 @@ def core(summary):
     exp = config.get('experiment', {})
     components = config.get('components', {})
     measured = meta.get('measurement', {})
+    from ..collector.metadata import git_metadata, initial_pose_metadata
+    initial = meta.get('initial_pose_metadata') or initial_pose_metadata(config)
+    initial_label = ('Explicit pose supplied; ' if initial['explicitly_supplied'] else 'No explicit pose supplied; ')
+    initial_label += ('resolved default: '+str(initial['resolved_pose']) if initial.get('resolution') == 'resolved'
+                      else 'simulator default unresolved')
     def component(name):
         value = components.get(name)
         if isinstance(value, dict):
@@ -91,7 +96,7 @@ def core(summary):
              'Controller': component('controller'),
              'Requested laps': exp.get('laps', 'Unavailable'),
              'Completed laps': measured.get('completed_laps', 'Unavailable'),
-             'Initial pose (x [m], y [m], yaw [rad])': meta.get('initial_pose', 'Unavailable')}
+             'Initial pose (x [m], y [m], yaw [rad])': initial_label}
     def readable(value):
         if value is None:
             return 'Not recorded'
@@ -122,9 +127,10 @@ def core(summary):
         if isinstance(component_config, dict):
             for name,value in component_config.get('params', {}).items():
                 facts[role.replace('_', ' ')+' · '+name.replace('_', ' ')] = value
-    source = meta.get('git', {})
+    source = git_metadata(meta.get('git'))
     commit = source.get('commit') or 'Unavailable'
-    branch = source.get('branch') or 'Branch not recorded'
+    branch = source.get('branch') or {'detached': 'Detached HEAD', 'unavailable': 'Git unavailable'}.get(source['branch_state'], 'Branch not recorded')
+    dirty_label = 'dirty' if source['dirty'] is True else 'clean' if source['dirty'] is False else 'dirty state not recorded'
     cards = ''.join('<div><dt>'+esc(k)+'</dt><dd>'+esc(readable(v))+'</dd></div>' for k,v in facts.items())
     level = config.get('logging', {}).get('level', 'unknown')
     recorder = meta.get('recorder', {})
@@ -149,7 +155,7 @@ def core(summary):
         issues.append('Recording was not confirmed closed')
     if missing:
         issues.append('Missing required inputs: '+', '.join(missing))
-    issues.extend(w for w in summary.get('warnings', []) if any(term in w.lower() for term in ('invalid (', 'alignment unavailable', 'alignment split', 'unverified', 'no finalized readable bag')))
+    issues.extend(w for w in summary.get('warnings', []) if any(term in w.lower() for term in ('samples invalid', 'invalid (', 'alignment unavailable', 'alignment split', 'unverified', 'no finalized readable bag')))
     if meta.get('recorder_integrity', {}).get('consistent') is False:
         issues.append('Recorded message counts do not match recorder acknowledgements')
     validity = ('Telemetry disabled by logging configuration' if level == 'off' else
@@ -161,7 +167,7 @@ def core(summary):
     provenance += '<h4>Collection provenance</h4>'+table(fields(meta))
     return ('<small>Run ID: '+esc(summary.get('run_id', 'Unavailable'))+' | Analysis ID: '+
             esc(summary.get('analysis_id', 'Unavailable'))+'</small><section><h2>Experiment Config</h2>'+
-            '<dl class="cards">'+cards+'</dl><div class="commit"><span>'+esc(branch)+'</span> <code>'+esc(commit[:7] if commit != 'Unavailable' else commit)+
+            '<dl class="cards">'+cards+'</dl><div class="commit"><span>'+esc(branch)+'</span> <small>'+esc(dirty_label)+'</small> <code>'+esc(commit[:7] if commit != 'Unavailable' else commit)+
             '</code> <button class="copy-commit" data-commit="'+esc(commit)+'" aria-label="Copy full commit" title="Copy full commit">⧉</button><small class="copy-result" aria-live="polite"></small></div>'+
             '<details><summary>All experiment settings</summary>'+table(fields(config))+'</details></section>'+
             '<section><h2>Collected Data</h2><strong>'+esc(validity)+'</strong><dl class="cards">'+

@@ -6,7 +6,10 @@ interfaces remain in use. Generated artifacts live under **`ws/benchmark_runs/`*
 
 ## Build and commands
 
-Rebuild the Docker image to install MCAP support and recreate the service to
+Rebuild the Docker image to install MCAP support and Plotly (`docker compose build ros`);
+`docker compose down` / `up` alone does not rebuild an existing image. Packages
+installed manually inside a container disappear when that container is recreated.
+Recreate the service to
 apply the read-only `/repository` source mount. Do this with the simulator
 disconnected and existing launches stopped. The additional mount enables Git
 snapshots; `BENCHMARK_REPO_ROOT` may identify another readable checkout.

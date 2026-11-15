@@ -42,6 +42,8 @@ class Sample:
     domain: str = 'transport'
     valid: bool = True
     received_monotonic_ns: int | None = None
+    availability: str = 'available'
+    rejection_reasons: tuple = ()
 
 
 @dataclass

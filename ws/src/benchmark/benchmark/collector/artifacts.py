@@ -62,10 +62,16 @@ def git_snapshot(workspace, output):
     output.mkdir()
     def git(*args):
         return subprocess.check_output(['git', '-c', f'safe.directory={workspace}', '-C', str(workspace), *args], stderr=subprocess.PIPE)
+    identity = {'commit': None, 'dirty': None, 'branch': None, 'branch_state': 'unavailable'}
     try:
         commit = git('rev-parse', 'HEAD').decode().strip()
+        identity['commit'] = commit
         branch = git('rev-parse', '--abbrev-ref', 'HEAD').decode().strip()
+        detached = branch == 'HEAD'
+        identity.update(branch=None if detached else branch,
+                        branch_state='detached' if detached else 'attached')
         status = git('status', '--porcelain=v1', '-z')
+        identity['dirty'] = bool(status)
         (output / 'status.bin').write_bytes(status)
         (output / 'tracked.patch').write_bytes(git('diff', '--binary', 'HEAD'))
         untracked = git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0')
@@ -80,10 +86,11 @@ def git_snapshot(workspace, output):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
             names.append({'path': name, 'sha256': digest(target)})
-        return {'commit': commit, 'branch': branch, 'dirty': bool(status), 'untracked': names,
+        return {'commit': commit, 'branch': None if detached else branch,
+                'branch_state': 'detached' if detached else 'attached', 'dirty': bool(status), 'untracked': names,
                 'tracked_patch_sha256': digest(output / 'tracked.patch')}
     except (subprocess.CalledProcessError, OSError, ValueError) as exc:
-        return {'available': False, 'reason': str(exc)}
+        return {**identity, 'available': False, 'reason': str(exc)}
 
 
 def finalize(run, metadata):

@@ -22,6 +22,7 @@ class Abort(RuntimeError):
 
 def run(config, args, *, on_finalized=None):
     from .progress import say, lap_message, result_message
+    from .metadata import initial_pose_metadata
     import rclpy
     from rclpy.node import Node
     from rclpy.signals import SignalHandlerOptions
@@ -60,6 +61,7 @@ def run(config, args, *, on_finalized=None):
                 'clock_domain': 'transport', 'recorder_clock_domain': 'transport',
                 'receipt_monotonic_domain': 'collector_container_monotonic',
                 'clock_provenance': 'fast_bridge SteadyEpoch: host monotonic + fixed epoch; NOT simulator physics time',
+                'initial_pose_metadata': initial_pose_metadata(config),
                 'requested_topic': REQUESTED, 'initial_pose': 'native simulator start; no numerical pose supplied',
                 'measurement': {'laps': [], 'completed_laps': 0, 'started': False},
                 'ground_truth_review_debt': 'Existing localization_gate uses ground truth/map origin; '
