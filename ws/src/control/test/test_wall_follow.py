@@ -22,8 +22,8 @@ from sensor_msgs.msg import LaserScan  # noqa: E402
 
 from builtin_interfaces.msg import Time  # noqa: E402
 from control.wall_follow_node import (LapCounter, TrackWidth, WallFollower, centring_error, corner_turn,  # noqa: E402
-                                      front_speed_factor, hairpin_side, measures_width,
-                                      rate_limit, side_openness)
+                                      front_speed_factor, hairpin_side, hairpin_tip, measures_width,
+                                      orbit_steering, rate_limit, side_openness)
 
 SPEED = 1.0
 DOMAIN = random.randint(1, 101)  # not 0: the live stack (bridge, sim car) runs there
@@ -69,12 +69,11 @@ def test_track_width_is_learned_from_both_walls():
     assert TrackWidth(lo=0.5, hi=6.0).update(0.1, 0.1) > 0.2   # implausible readings are clamped
 
 
-def test_width_is_measured_only_beside_parallel_walls_with_the_way_ahead_clear():
+def test_width_is_measured_only_beside_parallel_walls():
     deg = math.radians
-    assert measures_width(deg(3), deg(-5), 4.0, 2.0, deg(20))           # a straight: measure
-    assert not measures_width(deg(3), deg(-5), 1.5, 2.0, deg(20))       # wall ahead within the turn start
-    assert not measures_width(deg(-30), deg(2), 4.0, 2.0, deg(20))      # a wall angled across the car's path
-    assert not measures_width(None, deg(2), 4.0, 2.0, deg(20))          # one wall out of view
+    assert measures_width(deg(3), deg(-5), deg(20))               # a straight: measure
+    assert not measures_width(deg(-30), deg(2), deg(20))          # a wall angled across the car's path
+    assert not measures_width(None, deg(2), deg(20))              # one wall out of view
 
 
 def test_one_wall_holds_half_the_learned_width():
@@ -120,6 +119,35 @@ def test_hairpin_starts_where_the_inside_wall_ends_and_holds_its_side():
     assert hairpin_side(1, -1, 0.5, 2.0, w, 1.0, start) == 1    # mid-turn: the side is held
     assert hairpin_side(1, -1, 0.5, 3.6, w, 1.0, start) == 0    # way ahead clear again: done
     assert hairpin_side(0, -1, 2.1, 3.2, w, 1.0, start) == -1   # right hairpin
+    assert hairpin_side(0, 1, 2.1, 3.2, w, 1.0, start, armed=False) == 0        # not armed: none starts
+
+
+def test_hairpin_ends_after_its_turn_or_when_the_track_goes_the_other_way():
+    w, start = 1.35, 3.4
+    assert hairpin_side(1, 1, 2.1, 2.0, w, 1.0, start, turned=math.radians(170)) == 1
+    assert hairpin_side(1, 1, 2.1, 2.0, w, 1.0, start, turned=math.pi) == 0     # a U-turn's worth: over, even
+    assert hairpin_side(1, 1, 2.1, 2.0, w, 1.0, start, other_way=True) == 0     # ... with the start conditions met
+
+
+def test_hairpin_tip_is_the_closest_point_on_its_side_not_far_ahead():
+    angles = np.radians(np.arange(-135.0, 135.5, 0.5))
+    ranges = np.full(angles.size, 5.0)
+    ranges[np.argmin(abs(angles - math.radians(-100)))] = 0.8     # the wall's end, behind-right of the scanner
+    ranges[np.argmin(abs(angles - math.radians(-20)))] = 0.5      # something ahead-right: too far ahead to be it
+    x, y = hairpin_tip(ranges, angles, -1, 0.27, 5.0)
+    assert x == pytest.approx(0.27 + 0.8 * math.cos(math.radians(-100)), abs=0.01) and y < 0.0
+    assert hairpin_tip(ranges, angles, 1, 0.27, 5.0) is None       # nothing on the left
+
+
+def test_orbit_steering_circles_the_wall_end_at_the_radius():
+    wb, lock = 0.33, 0.524
+    on_circle = math.atan(wb / 0.8)
+    assert orbit_steering((0.2, -0.8), -1, 0.8, wb, 6.0, lock) is None       # end still ahead of the rear axle
+    assert orbit_steering((0.0, -0.8), -1, 0.8, wb, 6.0, lock) == pytest.approx(-on_circle)
+    assert abs(orbit_steering((0.0, -0.9), -1, 0.8, wb, 6.0, lock)) > on_circle     # drifted out: tighter
+    assert abs(orbit_steering((0.0, -0.7), -1, 0.8, wb, 6.0, lock)) < on_circle     # too close: wider
+    assert orbit_steering((0.0, -0.3), -1, 0.8, wb, 6.0, lock) == 0.0               # far too close: straight on
+    assert orbit_steering((0.0, 2.0), 1, 0.62, wb, 6.0, lock) == pytest.approx(lock)   # at most full lock
 
 
 def test_steering_rate_is_limited():
@@ -226,7 +254,8 @@ def drive_closed_loop(node, segments, done, x, y, yaw, dt=0.025, t_max=15.0):
     v, steer, t, min_clear = node.speed, 0.0, 0.0, np.inf
     while t < t_max:
         msg = scan_from(segments, x, y, yaw)
-        msg.header.stamp = Time(sec=int(t), nanosec=int(round((t % 1.0) * 1e9)) % 1000000000)
+        ns = int(round(t * 1e9))   # whole nanoseconds: rounding sec and nanosec apart stepped the stamp back 1 s
+        msg.header.stamp = Time(sec=ns // 1000000000, nanosec=ns % 1000000000)
         node.scan_callback(msg)
         v_cmd, s_cmd = commands[-1]
         steer += float(np.clip(s_cmd - steer, -3.2 * dt, 3.2 * dt))
@@ -240,6 +269,27 @@ def drive_closed_loop(node, segments, done, x, y, yaw, dt=0.025, t_max=15.0):
         if done(x, y, yaw):
             return 'through', t, min_clear
     return 'timeout', t, min_clear
+
+
+# SRL 2024 CDC's S-bend, simplified from its saved map (map frame): west along a lane whose right wall is a thin
+# peninsula ending at (2.35, 2.25); round its end to the north, then left (west) between an island's tip (1.2, 3.9)
+# and the outside wall. Behind the peninsula is a dead-end wedge; the lane itself ends closed, further west.
+S_BEND_LOWER = [(7.0, 1.3), (5.0, 1.0), (3.4, 0.65), (2.0, 0.7), (0.5, 1.2), (-0.5, 1.7), (-0.6, 2.1), (0.1, 3.25),
+                (1.2, 3.9), (0.1, 3.4), (-1.5, 3.75), (-4.0, 4.0)]
+S_BEND_PENINSULA = [(7.0, 3.45), (2.35, 2.25), (2.55, 2.5), (5.6, 3.25)]
+S_BEND_OUTSIDE = [(5.6, 3.25), (3.0, 4.75), (2.0, 5.1), (1.0, 5.35), (0.2, 5.5), (-1.5, 5.75), (-4.0, 6.0)]
+
+
+def wall_end_u_turn(lane, thick, depth, side=-1):
+    """A U-turn round the end (x = 0) of a `thick` wall on `side` (-1 right): a `lane` m approach lane heading +x,
+    an equally wide return lane beyond the wall, and the outside wall rounding off `depth` m beyond its end."""
+    h, y_in, y_back = lane / 2, -lane / 2 - thick, -1.5 * lane - thick
+    a = np.linspace(math.pi / 2, -math.pi / 2, 25)
+    centre, semi = (h + y_back) / 2, (h - y_back) / 2
+    outside = [(-6.0, h), (0.0, h)] + [(depth * math.cos(t), centre + semi * math.sin(t)) for t in a] + [(0.0, y_back), (-6.0, y_back)]
+    wall = [(-6.0, -h), (0.0, -h), (0.0, y_in), (-6.0, y_in)]
+    flip = lambda line: [(x, -side * -y) for x, y in line]  # noqa: E731  (side -1: as built; +1: mirrored)
+    return walls(flip(outside), flip(wall)), (y_in, y_back)
 
 
 @pytest.fixture(scope='module')
@@ -380,6 +430,47 @@ def test_drives_through_the_recorded_u_turn_hairpin(ros, speed):
         node.destroy_node()
     assert outcome == 'through', (outcome, seconds, min_clear)
     assert min_clear > 0.1, min_clear
+
+
+@pytest.mark.parametrize('lane, thick, depth, side, speed', [
+    (2.0, 0.3, 3.0, -1, 1.2),   # wide lane, thick wall: full lock at the scanner clipped the wall's far corner
+    (2.0, 0.3, 3.0, 1, 1.2),
+    (1.6, 0.3, 3.0, -1, 0.8),   # SRL 2024 CDC-like
+    (1.6, 0.05, 4.0, -1, 1.2),  # outside wall 4 m beyond: the hairpin never started, the car drove into it
+    (1.2, 0.3, 4.0, -1, 0.8),
+])
+def test_u_turns_round_a_wall_end(ros, lane, thick, depth, side, speed):
+    # Closed-loop regression: the previous hairpin turn (full lock once the inside wall ended at the scanner, the
+    # wall ahead within 3.5 m) crashed in each of these.
+    segments, (y_in, y_back) = wall_end_u_turn(lane, thick, depth, side)
+    node = WallFollower()
+    node.speed = speed
+    try:
+        in_return_lane = lambda x, y, yaw: x < -2.0 and -side * y > -y_in and math.cos(yaw) < -0.8  # noqa: E731
+        outcome, seconds, min_clear = drive_closed_loop(node, segments, in_return_lane, x=-4.5, y=0.0, yaw=0.0,
+                                                        t_max=20.0)
+    finally:
+        node.destroy_node()
+    assert outcome == 'through', (outcome, seconds, min_clear)
+    assert min_clear > 0.1, min_clear
+
+
+@pytest.mark.parametrize('speed', [0.8, 1.0, 1.2])
+def test_takes_an_s_bend_round_a_wall_end_not_the_dead_end_behind_it(ros, speed):
+    # Closed-loop regression (SRL 2024 CDC): the turn round the peninsula's end starts like a hairpin, but the track
+    # then goes left. Held to the hairpin's side, the car turned on into the dead-end wedge behind the peninsula
+    # and hit the outside wall on every lap; the followers before this crash here at each of these speeds.
+    node = WallFollower()
+    node.speed = speed
+    try:
+        in_top_lane = lambda x, y, yaw: x < -1.0 and y > 3.9  # noqa: E731
+        outcome, seconds, min_clear = drive_closed_loop(
+            node, walls(S_BEND_LOWER, S_BEND_PENINSULA, S_BEND_OUTSIDE), in_top_lane, x=5.0, y=2.0, yaw=math.pi,
+            t_max=25.0)
+    finally:
+        node.destroy_node()
+    assert outcome == 'through', (outcome, seconds, min_clear)
+    assert min_clear > 0.05, min_clear
 
 
 def test_stops_after_laps(run):
