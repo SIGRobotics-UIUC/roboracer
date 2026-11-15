@@ -12,6 +12,8 @@
 # Writes tracks/<name>/: map.pbstream (Cartographer) or map.posegraph/map.data (SLAM Toolbox),
 # map.pgm, map.yaml, trajectory.csv, centerline.csv,
 # raceline.csv, preview.png. Re-plan an existing map with: ros2 run planning build_raceline <name>
+# Warns when Cartographer reports scans arriving below MIN_SCAN_HZ (default 10): a slow simulator or bridge
+# distorts the map (good maps came from 12-27 Hz; at ~5 Hz the track was drawn twice, rotated).
 set -eo pipefail
 
 usage="usage: map_track.sh <track name> [--slam-toolbox] [--wall-follow | --gap-follow] [--laps N] [follower launch args, e.g. speed:=1.2]"
@@ -47,6 +49,17 @@ if [ "$backend" = slam_toolbox ] && [ -n "$follow_launch" ]; then
     # Explicit user launch arguments remain last and can override this default.
     follow_args=("speed:=0.5" "${follow_args[@]}")
 fi
+min_scan_hz=${MIN_SCAN_HZ:-10}
+[[ "$min_scan_hz" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo 'MIN_SCAN_HZ must be a nonnegative number' >&2; exit 1; }
+
+# The scan rates [Hz] in a mapping log: Cartographer logs "scan rate: X Hz" about every 15 s (SLAM Toolbox: none).
+scan_rates() { grep -oE 'scan rate: [0-9.]+' "$1" 2>/dev/null | awk '{print $3}' || true; }
+# "<readings> <readings below $2 Hz> <lowest rate>" for the log $1; nothing without a reading.
+scan_rate_summary() {
+    scan_rates "$1" | awk -v min="$2" 'NR == 1 || $1 < lo {lo = $1} $1 < min {low++}
+                                       END {if (NR) printf "%d %d %.1f\n", NR, low, lo}'
+}
+
 source "$(dirname "$0")/common.sh"
 
 if [ -e "$tracks/$name" ] || [ -L "$tracks/$name" ]; then
@@ -102,10 +115,24 @@ if [ -n "$follow_launch" ]; then
     kill -0 "$follower" 2>/dev/null || { echo "$follow_launch failed to start, see $follow_log" >&2; exit 1; }
     echo "$follow_launch driving $laps lap(s) (log: $follow_log). Press Enter to stop early and save the map."
     shown=0
+    rates_seen=0
+    slow=false
     while kill -0 "$follower" 2>/dev/null; do
         mapper_up || { echo "$backend stopped during mapping; see $log" >&2; exit 1; }
         if read -r -t 1 _ </dev/tty; then
             break
+        fi
+        rates_now=$(scan_rates "$log" | wc -l)
+        if [ "$rates_now" -gt "$rates_seen" ]; then
+            rates_seen=$rates_now
+            rate=$(scan_rates "$log" | tail -n 1)
+            if awk -v r="$rate" -v m="$min_scan_hz" 'BEGIN {exit !(r < m)}'; then
+                $slow || echo "  WARNING: scans are arriving at $rate Hz (below $min_scan_hz): the map may come out distorted" >&2
+                slow=true
+            elif $slow; then
+                echo "  scans back to $rate Hz"
+                slow=false
+            fi
         fi
         done_laps=$(grep -c 'Lap [0-9]*/[0-9]* complete' "$follow_log" || true)
         if [ "$done_laps" -gt "$shown" ]; then
@@ -126,6 +153,16 @@ else
     read -rp "Stop the car, then press Enter to save the map... " </dev/tty
 fi
 
+scan_warning=
+summary=$(scan_rate_summary "$log" "$min_scan_hz")
+if [ -n "$summary" ]; then
+    read -r rate_readings rate_low rate_lowest <<<"$summary"
+    if [ "$rate_low" -gt 0 ]; then
+        scan_warning="WARNING: scans arrived below $min_scan_hz Hz in $rate_low of $rate_readings readings (lowest $rate_lowest Hz, see 'scan rate' in $log): the simulator or bridge was running slowly, so the map may be distorted. Check map.pgm and preview.png; if walls are doubled, map again under a new name."
+        echo "$scan_warning" >&2
+    fi
+fi
+
 # keep mapping running on a failed save (the session is not on disk yet); save_map can be rerun
 until ros2 run perception "$save_command" "$name"; do
     mapper_up || echo "$backend is not running (see $log): the map cannot be saved" >&2
@@ -144,8 +181,10 @@ if [ "$status" -eq 2 ]; then
          "and its '# raceline:' header line). Check preview.png before racing." >&2
 elif [ "$status" -ne 0 ]; then
     echo "build_raceline failed: no raceline for $name (map saved; rerun: ros2 run planning build_raceline $name)" >&2
+    [ -z "$scan_warning" ] || echo "$scan_warning" >&2
     exit "$status"
 fi
+[ -z "$scan_warning" ] || echo "$scan_warning" >&2   # again: the planner's output has scrolled it away
 if [ "$backend" = slam_toolbox ]; then
     echo "Done: $tracks/$name (check preview.png). SLAM Toolbox graph is not a Cartographer pbstream."
     echo "For MCL later, reset the car to its mapping start and launch: ros2 launch control race.launch.py track:=$name localizer:=mcl speed_scale:=0.3"

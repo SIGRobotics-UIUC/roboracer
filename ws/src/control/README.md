@@ -185,9 +185,15 @@ ros2 launch control wall_follow.launch.py speed:=1.0 debug:=true     # on its ow
 | `lookahead` | `0.8` | m ahead at which the wall distances are projected |
 | `beam_angle_deg` | `45` | angle between the side beam and the forward beam |
 | `max_range` | `5.0` | m, a side with no return within this has no wall |
-| `track_width` | `1.2` | m, initial guess only: the width is measured whenever both walls are in view (`width_alpha` `0.2` smoothing) |
+| `track_width` | `1.2` | m, initial guess only: the width is measured (from the distances to the walls beside the car) whenever both walls are in view and nearly parallel to the car (`width_alpha` `0.2` smoothing) |
+| `width_max_angle_deg` | `20.0` | deg, walls angled more than this (corners, a hairpin's outside wall ahead) do not update the width |
 | `turn_start_widths`, `turn_full_widths` | `1.0`, `0.5` | wall ahead within this many track widths: start turning towards the open side, full lock (floors `min_turn_full` `0.5` m, `min_turn_span` `0.3` m) |
-| `open_angle_deg` | `60` | beams that compare how open the two sides are |
+| `open_min_deg`, `open_max_deg` | `20`, `110` | each side's beams between these angles compare how open the two sides are (mean range) |
+| `hairpin_open_widths`, `hairpin_tip_max` | `1.0`, `1.2` | a hairpin (a U-turn round a wall end) starts when the side range on the open side exceeds `hairpin_open_widths` track widths, that wall's end is within `hairpin_tip_max` m, and the wall ahead is within `hairpin_max_start` (`4.5` m); its side is then held |
+| `orbit_margin`, `orbit_gain` | `0.05`, `6.0` | in a hairpin, once the inside wall's end is level with the rear axle the car circles it at the distance it has to it (at least the full-lock turning radius + `orbit_margin` m), correcting by `orbit_gain` 1/m^2 per m off that radius; the corner turn still tightens it near the wall ahead. `laser_x` (`0.2733` m) places the scan relative to `base_link` |
+| `hairpin_max_turn_deg` | `180` | a hairpin ends when the way ahead is clear, or once the car has turned this far into it (estimated from the commanded speed and steering with `wheelbase` from `vehicle.yaml`); it re-arms when the way ahead is clear or the car is back between two parallel walls |
+| `hairpin_min_turn_deg`, `hairpin_other_way_s` | `80`, `0.2` | an S-bend: the hairpin also ends once the car has turned `hairpin_min_turn_deg` and the other side has been the more open one for `hairpin_other_way_s` |
+| `hairpin_reach`, `hairpin_reach_turn_deg` | `1.5`, `45` | not a wall end (a wall curving away, a gap in the scan): the hairpin is dropped if after `hairpin_reach` m the car has turned less than `hairpin_reach_turn_deg`; that side starts no new one until a wall is beside the car there again |
 | `front_slow_widths`, `front_min_factor` | `1.05`, `0.4` | wall ahead within this many track widths: slow down, to this fraction of `speed` |
 | `corner_slowdown` | `0.5` | fraction of `speed` shed at full steering |
 | `max_steering_angle` | `0.524` | rad, steering is clipped to this; `wall_follow.launch.py` loads it from `config/vehicle.yaml` |
