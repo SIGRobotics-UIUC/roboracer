@@ -10,6 +10,9 @@ services:
       - "8765:8765"   # Foxglove
     volumes:
       - ./ws:/root/ws
+      - ./:/repository:ro     # reproducible Git/source snapshots for benchmark runs
       - ./.bash_aliases:/root/.bash_aliases:ro
     working_dir: /root/ws
+    environment:
+      BENCHMARK_REPO_ROOT: /repository
     command: bash

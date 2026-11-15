@@ -2,12 +2,13 @@
 
 ## Architecture
 
-- ROS 2 Humble; four Python `ament_python` autonomy/bridge packages and the native `slam_graph_tools` snapshot exporter under `ws/src/`.
+- ROS 2 Humble; five Python `ament_python` packages and the native `slam_graph_tools` snapshot exporter under `ws/src/`.
 - `autodrive_bridge`: simulator-only Socket.IO `fast_bridge`, sensor/command `adapter`, encoder-based `wheel_odom`, and keyboard teleop. On the car, hardware drivers/VESC replace these interfaces.
 - `perception`: Cartographer mapping and frozen-map localization, `localization_gate`, alternative numpy MCL, map saving, and map-origin recording. `ekf.launch.py` and `corrector` are experimental and outside the race pipeline.
 - Optional mapping backend: `slam_mapping.launch.py` runs async SLAM Toolbox plus `slam_mapping_pose` (native pose relay and online trajectory). `save_slam_map` stages native `.posegraph`/`.data` and uses `slam_graph_tools` to export a consistent final map/trajectory; it does not create a Cartographer pbstream or use simulator ground truth.
 - `planning`: offline centerline/width extraction and TUM minimum-time raceline generation; optional runtime `obstacle_spliner_node` for stationary obstacles absent from the map. TUM runs in a separate venv through subprocess/CSV exchange.
 - `control`: pure pursuit with adaptive lookahead, reactive follow-the-gap, centering wall follower, and experimental disparity-gap follower. `race.launch.py` orchestrates localization, pure pursuit, and optional avoidance.
+- `benchmark`: managed collection with an independent command gate/rosbag2 recorder, plus offline race/timing analysis. Artifacts use `ws/log/runs/` and `ws/log/reports/`; never execute/import `ws/scripts/` from this package. See its README and VALIDATION.md for supported adapters and unvalidated simulator behavior.
 - Read `docs/pipeline.md`, relevant launch/config files, and neighboring tests before editing. Keep changes scoped; preserve working interfaces and validated behavior.
 
 ## Environment and commands
@@ -52,7 +53,8 @@ colcon build --symlink-install --packages-select <package>
 - TF chain: `map -> odom -> base_link -> laser/imu/front_camera`. Exactly one of Cartographer, MCL, or SLAM Toolbox mapping owns `map -> odom`; wheel odometry owns `odom -> base_link`; the sim adapter owns static mounts. `base_link` is the rear axle.
 - Never run both localizers or competing `/drive` publishers. Preserve single-instance guards and bridge frame timestamps; duplicate odometry/IMU stamps can abort Cartographer.
 - Cartographer requires the IMU at the `base_link` origin (mount rotation is allowed). Preserve frame IDs, units, QoS compatibility, and timestamp alignment.
-- Bridge raw topics use `/autodrive/roboracer_1/*`. Current timestamps are arrival-clock based; do not assume deterministic simulation time or existing `/clock` support.
+- Bridge raw topics use `/autodrive/roboracer_1/*`. With `use_sim_time:=true`, the bridge publishes a host-monotonic transport `/clock` that continues during simulator stalls; sensor stamps represent transport arrival, not native simulator acquisition/physics time. Do not assume deterministic simulation time or a Windows/container clock relationship.
+- During benchmark runs, controllers publish `/benchmark/requested_drive`; only `benchmark_gate` publishes `/drive`. Do not bypass the inhibited gate or start another controller/teleop. Raw runs are sealed immediately after finalization; analysis must write outside them.
 
 ## Mapping, planning, and racing
 

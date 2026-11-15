@@ -1,0 +1,14 @@
+experiment:
+  map: iros26
+  laps: 5
+  warmup_laps: 1
+components:
+  localization:
+    type: cartographer
+    params: {}
+  controller:
+    type: map
+    params:
+      speed_scale: 0.5
+logging:
+  level: basic
