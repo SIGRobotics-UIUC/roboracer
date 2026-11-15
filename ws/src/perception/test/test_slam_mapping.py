@@ -78,6 +78,28 @@ def test_backend_selection_executes_actual_shell_parser():
         assert subprocess.run(['bash', '-c', parser, 'map_track.sh', 'new', *flags], capture_output=True).returncode != 0
 
 
+def test_map_track_reports_slow_scan_rates(tmp_path):
+    # Regression: maps mapped with scans arriving at ~5 Hz (a slow simulator) came out with the track drawn twice;
+    # map_track.sh warns from the rates Cartographer logs.
+    parser = SCRIPT.read_text().split('source "$(dirname "$0")/common.sh"')[0]
+    log = tmp_path / 'map_track.log'
+    line = '[cartographer_node-1] [INFO] [1.0] [cartographer logger]: I collated_trajectory_builder.cc:81] {} rate: {} Hz'
+
+    def summary(rates, env=None):
+        log.write_text(''.join(line.format(kind, rate) + '\n' for rate in rates for kind in ('imu', 'odom', 'scan')))
+        command = parser + '\nscan_rate_summary "$LOG" "$min_scan_hz"'
+        return subprocess.run(['bash', '-c', command, 'map_track.sh', 'new'], capture_output=True, text=True,
+                              check=True, env=dict(os.environ, LOG=str(log), **(env or {}))).stdout.strip()
+
+    assert summary([19.41, 22.42, 9.25, 5.15, 5.78]) == '5 3 5.2'      # readings, below 10 Hz, lowest
+    assert summary([19.69, 25.48, 16.44]) == '3 0 16.4'                # a healthy run
+    assert summary([19.69, 25.48, 16.44], {'MIN_SCAN_HZ': '20'}) == '3 2 16.4'
+    assert summary([]) == ''                                           # no reading (SLAM Toolbox, a short run)
+    command = parser + '\ntrue'
+    assert subprocess.run(['bash', '-c', command, 'map_track.sh', 'new'], capture_output=True,
+                          env=dict(os.environ, MIN_SCAN_HZ='fast')).returncode != 0
+
+
 def test_slam_only_conservative_speed_and_user_override_order():
     parser = SCRIPT.read_text().split('source "$(dirname "$0")/common.sh"')[0]
     command = parser + '\nprintf "%s\\n" "${follow_args[@]}"'
