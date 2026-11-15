@@ -218,6 +218,29 @@ required/optional canonical signals, return metrics using `core.results.metric`
 and figures as relative paths with captions. Required missing signals skip the
 module. Malformed results and nonfinite JSON values fail only that module.
 
+The report separates recorder finalization from collection outcome. “Recorder
+finished; bag metadata written” reflects the recorder's `closed` flag: the
+rosbag writer was released and `bag/metadata.yaml` exists. This normal lifecycle
+state does not establish lap completion, bag integrity, or successful collection.
+The manager separately checks recorder errors, exit status, and bag message counts.
+
+Collection outcomes retain their recorded meanings:
+
+- `completed`: the requested warm-up and measurement lap count was reached;
+  unconfirmed stopping or recorder/integrity failures can still change this to `aborted`.
+- `stopped`: an operator stop or keyboard interrupt ended collection. Saved data
+  may be partial; a subsequent recorder failure can change this to `aborted`.
+- `aborted`: collection raised an error (for example timeout, collision under
+  the abort policy, or input/process health failure), or finalization checks failed.
+  Recorded data may still be useful for diagnosis.
+- `recovered_incomplete`: artifacts were explicitly recovered from an incomplete
+  run; stopping status is unknown and the bag is not implicitly repaired.
+
+Collection warnings and errors appear below the collected-data facts in collapsed
+details, retaining invalid-sample diagnostics. The expected pre-first-lap
+`last_lap_time` infinity sentinel, corroborated by a zero lap counter, is
+uninitialized rather than invalid and does not itself trigger a warning.
+
 An incomplete run cannot be analyzed implicitly. After all collection processes
 are stopped, `benchmark recover OLD --run-id NEW` copies its artifacts to a new
 finalized `recovered_incomplete` run, with unknown stop status. It never repairs
@@ -264,3 +287,67 @@ wraps break signal lines. Signed lateral distributions retain signed means and
 medians, with explicitly named absolute P95/max magnitudes; vehicle-center
 clearance distributions report P5/min. Computation Timing is currently hidden
 from reports and excluded from the default `all` module selection.
+
+### Offline report browser tests
+
+`test/test_race_view_browser.py` retains the local Chromium interaction harness.
+It renders a standalone temporary report, opens it with Playwright, and checks
+lap selection, zoom synchronization, pinning, track hover, keyboard navigation,
+missing samples, and empty laps. No simulator or ROS graph is required.
+
+In an environment with the benchmark Python dependencies (including Plotly):
+
+```bash
+python3 -m venv --system-site-packages /tmp/benchmark-browser-venv
+/tmp/benchmark-browser-venv/bin/pip install -r src/benchmark/test/browser-requirements.txt
+/tmp/benchmark-browser-venv/bin/python -m playwright install chromium
+PYTHONPATH=src/benchmark /tmp/benchmark-browser-venv/bin/python -m pytest src/benchmark/test/test_race_view_browser.py -q
+```
+
+Run from `/root/ws` (or `ws/` on the host). The test module skips if Playwright
+or its Chromium executable is missing; inspect the pytest summary before claiming
+browser validation passed. The browser harness uses temporary report fixtures and
+does not write into saved runs or reports.
+
+To profile real pointer movement against a representative saved report, run
+`PYTHONPATH=src/benchmark python3 src/benchmark/test/profile_race_view.py /path/to/metrics.json`
+in the same browser-test environment. It renders current viewer code into a
+temporary directory; `--html /path/to/baseline.html` profiles a saved HTML baseline.
+It reports pointer moves, selection updates, figure redraws, and update intervals.
+Duplicate selections are intentionally omitted, so compare cadence together with
+sample changes rather than treating update counts as frame rates.
+
+Viewer reference progress is geometric distance from the first preserved raceline
+point, wrapped into `[0, track length)`. Native lap-counter boundaries use a
+separate start line and delivery time; the first pose in a lap need not be at 0%.
+The viewer does not shift telemetry to force that correspondence.
+
+Collection first stages artifacts under `benchmark_runs/attempts/<id>/`. Only
+collections with observed wheel-odometry movement after motion was enabled are
+published under `runs/<id>/`, after all owned writers stop and before sealing.
+Movement uses finite absolute `/odom.twist.twist.linear.x` at or above the configured
+`watchdogs.rest_speed_mps` boundary (and strictly greater than zero); commands
+alone and simulator reset motion do not qualify. Very slow motion below that
+boundary is retained as an attempt rather than a run. This is an artifact policy,
+not a change to command gating, stop confirmation, or the recorded outcome.
+
+Startup failures and stationary attempts retain sealed diagnostics in `attempts/`
+and do not trigger `--analyze`. Their final CLI result has `run_id: null`, an
+`attempt_id`, and the diagnostic path. Existing saved runs are preserved.
+Interrupted processes may leave unsealed artifacts in `attempts/`; preserve those
+for diagnosis. The explicit `recover` command also searches `attempts/` when the
+ID is absent from `runs/`, retaining its active-lock and no-overwrite checks.
+
+The lap viewer uses recorded localized-pose samples for navigation. Other telemetry
+and ground-truth markers require an exact source timestamp match in the same clock
+segment and domain; unmatched values are unavailable, with no interpolation or
+nearest-time substitution. Offline aggregate metric analysis retains its separate
+bounded-interpolation policy. Raceline reference values and errors remain geometric
+derivations, not additional telemetry observations.
+
+Dots expose isolated recorded samples where adjacent line connections are broken.
+Lines remain broken at discontinuities, unavailable values, and start/finish or
+heading wraparound. Pointer selection snaps to the nearest recorded point
+(horizontal distance in plots), including when the pointer is in a gap. Keyboard and button navigation still step through
+recorded poses, including across gaps. Regenerate reports from the run to produce
+the recorded-only payload; previously saved HTML and metrics are not rewritten.

@@ -112,6 +112,8 @@ def main(argv=None):
 def recover(args):
     import fcntl
     source = args.log_root/'runs'/args.run_id
+    if not source.exists():
+        source = args.log_root/'attempts'/args.run_id
     if (source/'complete.json').exists():
         raise ValueError('Finalized runs cannot be recovered or modified')
     if not source.is_dir():

@@ -89,10 +89,11 @@ def test_managed_startup_maps_parameters_and_remaps_command_owner(controller):
     assert control[-2:] == ['-r', '/drive:=/benchmark/requested_drive']
 
 
-def test_recovery_is_explicit_exclusive_and_never_changes_original(tmp_path):
+@pytest.mark.parametrize('collection_root', ['runs', 'attempts'])
+def test_recovery_is_explicit_exclusive_and_never_changes_original(tmp_path, collection_root):
     import fcntl
     from argparse import Namespace
-    source = unique_directory(tmp_path/'runs', 'crashed')
+    source = unique_directory(tmp_path/collection_root, 'crashed')
     (source/'metadata.json').write_text('{"status":"collecting"}')
     lock = (source/'collection.lock').open('x')
     fcntl.flock(lock, fcntl.LOCK_SH)
@@ -135,3 +136,35 @@ def test_timestamp_run_prefix_collision_and_exact_ids(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='99 characters'):
         unique_directory(tmp_path, timestamp_prefix='x'*100)
     assert len(unique_directory(tmp_path, timestamp_prefix='x'*99).name) <= 128
+
+
+@pytest.mark.parametrize('controller', ['map', 'pure_pursuit'])
+def test_integer_yaml_values_for_double_ros_parameters_are_normalized(controller):
+    import yaml
+    supplied = configuration()
+    supplied['components']['controller'] = {'type': controller, 'params': {'speed_scale': 1, 'max_speed': 0}}
+    config = resolve(supplied)
+    params = controller_parameters(config, {}, '/assets/raceline.csv')
+    loaded = yaml.safe_load(yaml.safe_dump(params))
+    assert type(loaded['speed_scale']) is float and loaded['speed_scale'] == 1.
+    assert type(loaded['max_speed']) is float and loaded['max_speed'] == 0.
+
+
+def test_only_moved_attempts_are_published_and_existing_runs_are_preserved(tmp_path):
+    from benchmark.collector.artifacts import promote_attempt
+    attempt = unique_directory(tmp_path/'attempts', 'startup')
+    finalize(attempt, {'status': 'aborted'})
+    assert promote_attempt(attempt, tmp_path, False) == attempt
+    assert not (tmp_path/'runs').exists()
+    assert verify(attempt)['status'] == 'aborted'
+    moved = unique_directory(tmp_path/'attempts', 'moved')
+    (moved/'controller.log').write_text('retained diagnostics')
+    published = promote_attempt(moved, tmp_path, True)
+    finalize(published, {'status': 'stopped'})
+    assert (published/'controller.log').read_text() == 'retained diagnostics'
+    assert published == tmp_path/'runs'/'moved'
+    assert verify(published)['status'] == 'stopped'
+    collision = unique_directory(tmp_path/'attempts', 'moved')
+    with pytest.raises(ValueError, match='already exists'):
+        promote_attempt(collision, tmp_path, True)
+    assert collision.exists() and verify(published)['status'] == 'stopped'

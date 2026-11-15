@@ -9,6 +9,6 @@ components:
   controller:
     type: map
     params:
-      speed_scale: 0.5
+      speed_scale: 1.0 
 logging:
   level: basic

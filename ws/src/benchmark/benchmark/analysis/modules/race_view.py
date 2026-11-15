@@ -21,11 +21,12 @@ def payload(data, rows, truth, config):
     use_receipt = measured.get('start_monotonic_ns') is not None
     def boundary_time(sample):
         return sample.received_monotonic_ns if use_receipt else sample.recorded_ns
-    # Align other numerical quantities with the same segment/domain/gap rules as poses.
+    # The viewer requires exact recorded timestamps; metric analysis retains its
+    # separate bounded-interpolation policy.
     def scalar(name, column):
         source = [replace(s, value=[s.value[column]]*3) for s in measurement_samples(data, name)]
-        return aligned_pose(source, pose, gap)[:, 0]
-    aligned_truth = aligned_pose(truth, pose, gap)
+        return aligned_pose(source, pose, gap, interpolate=False)[:, 0]
+    aligned_truth = aligned_pose(truth, pose, gap, interpolate=False)
     controller = data.metadata.get('config', {}).get('components', {}).get('controller', {})
     params = controller.get('params', {})
     target = projection[:, 3]*params.get('speed_scale', .5)
@@ -46,7 +47,7 @@ def payload(data, rows, truth, config):
         values['Effective spatial raceline target|m/s|Motion and commands|Speed'] = target
     if truth:
         values['Ground truth speed|m/s|Motion and commands|Speed'] = aligned_pose(
-            [replace(s, value=[s.value[3]]*3) for s in truth], pose, gap)[:, 0]
+            [replace(s, value=[s.value[3]]*3) for s in truth], pose, gap, interpolate=False)[:, 0]
         values['Ground truth heading|rad|Motion and commands|Heading'] = aligned_truth[:, 2]
         errors = np.array([s.value[:3] for s in pose])-aligned_truth
         values['Localization position error|m|Localization|Position error'] = np.linalg.norm(errors[:, :2], axis=1)
@@ -57,6 +58,8 @@ def payload(data, rows, truth, config):
         tp[tp[:, 4] != 1] = np.nan
         values['True lateral|m|Tracking|Signed lateral error'] = tp[:, 1]
         values['True heading|rad|Tracking|Signed heading error'] = tp[:, 2]
+        values['True absolute lateral|m|Tracking|Absolute lateral error'] = abs(tp[:, 1])
+        values['True absolute heading|rad|Tracking|Absolute heading error'] = abs(tp[:, 2])
     map_data = None
     if 'map.yaml' in data.assets:
         from planning.centerline import OccupancyMap
@@ -109,16 +112,11 @@ def payload(data, rows, truth, config):
         samples.append({'t':(s.source_ns-origin)/1e9, 'recorded':boundary_time(s),
                         'd':float(projection[i, 0]) if valid else None,
                         'xy':s.value[:2], 'heading':float(s.value[2]), 'truth':aligned_truth[i,:2].tolist(), 'continuous':continuous})
-    # Break heading lines at wrap crossings rather than drawing a false jump.
-    for key, array in values.items():
-        array = np.asarray(array, dtype=float).copy()
-        if key.endswith('|Heading'):
-            jumps = np.r_[False, abs(np.diff(array)) > np.pi]
-            array[jumps] = np.nan
-        values[key] = array.tolist()
+    # Preserve recorded heading values; the renderer breaks lines at wrap crossings.
+    values = {key: np.asarray(array, dtype=float).tolist() for key, array in values.items()}
     result = {'samples':samples, 'signals':values, 'laps':laps, 'reference':rows[:,1:3].tolist(),
               'map':map_data, 'length':length, 'source':data.metadata.get('config',{}).get('components',{}).get('localization',{}).get('type','unknown'),
-              'time_origin_ns':str(origin)}
+              'value_alignment':'exact_recorded_timestamp', 'time_origin_ns':str(origin)}
     def clean(x):
         if isinstance(x, float) and not np.isfinite(x): return None
         if isinstance(x, list): return [clean(v) for v in x]
@@ -139,14 +137,23 @@ def render_report(result):
             return ' · '.join(k.replace('_', ' ')+': '+format_value(v) for k,v in value.items())
         return str(value)
     metrics = ''.join('<tr><td>'+esc(k.replace('_', ' '))+'</td><td>'+esc(format_value(v.get('value')))+'</td><td>'+esc(v.get('units') or '')+'</td><td>'+esc(v.get('reason',''))+'</td></tr>' for k,v in result.get('metrics',{}).items())
-    data = json.dumps(result.get('viewer', {'laps':[]}), allow_nan=False).replace('<','\\u003c')
+    data = json.dumps(result.get('viewer', {'laps':[]}), allow_nan=False).replace('<','\u003c')
     script = Path(__file__).with_name('race_view.js').read_text()
     outcome = esc(result.get('metrics', {}).get('failure_classification', {}).get('value', 'Unavailable'))
     return ('<section id="race-performance"><style>'+
             '#race-performance .race-inspect{display:grid;grid-template-columns:minmax(300px,42%) minmax(0,1fr);gap:20px;align-items:start}'
-            '#race-performance .race-map{position:sticky;top:16px;height:70vh;min-height:350px;display:flex;flex-direction:column;gap:8px}'
+            '#race-performance .race-map{position:sticky;top:16px;height:90vh;min-height:500px;display:flex;flex-direction:column;gap:8px}'
+            '#race-performance .race-controls{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;align-items:center}'
+            '#race-performance .race-controls button,#race-performance .race-controls select{min-width:0;height:36px;box-sizing:border-box;padding:8px 4px;font-size:12px;white-space:nowrap}'
+            '#race-performance .race-controls .race-select{grid-column:span 2}'
+            '#race-performance .race-controls .race-prev{grid-column:span 2}'
+            '#race-performance .race-controls .race-next{grid-column:span 2}'
+            '#race-performance .race-controls .race-unpin{grid-column:span 4}'
             '#race-performance .race-map svg{width:100%;flex:1;min-height:0;touch-action:none}'
-            '#race-performance .race-readout{display:flex;flex-wrap:wrap;gap:20px;background:#f4f6fa;border-radius:8px;padding:14px;margin:12px 0}'
+            '#race-performance .race-readout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;min-height:106px;background:#f4f6fa;border-radius:8px;padding:14px;margin:12px 0}'
+            '#race-performance .race-readout>div{min-width:0;min-height:48px}'
+            '#race-performance .race-readout strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:13px}'
+            '#race-performance .race-label{margin:0;min-height:24px}'
             '#race-performance .race-readout span{display:block;color:#687483;font-size:12px}'
             '#race-performance .race-panel{position:relative}'
             '#race-performance .race-cursor{position:absolute;top:20px;bottom:135px;border-left:1px dashed #334155;pointer-events:none;display:none}'
@@ -164,9 +171,9 @@ def render_report(result):
             '#race-performance .race-intersection{position:absolute;width:7px;height:7px;border:1px solid white;border-radius:50%;transform:translate(-50%,-50%)}'
             '#race-performance .race-value{box-sizing:border-box;max-width:210px;padding:3px 6px;background:rgba(255,255,255,.96);border-left:3px solid;font-size:10px;line-height:16px;border-radius:3px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;box-shadow:0 1px 4px #17243818}'
             '#race-performance .race-value-list{position:absolute;max-width:210px;overflow:auto;pointer-events:auto;background:white;box-shadow:0 2px 8px #17243822;border-radius:5px}'
-            '@media(max-width:850px){#race-performance .race-inspect{display:block}#race-performance .race-map{position:relative;height:420px}}'
+            '@media(max-width:850px){#race-performance .race-inspect{display:block}#race-performance .race-map{position:relative;height:800px;max-height:90vh}}'
             '</style><h2>Race Performance</h2><p>Race outcome: '+outcome+'</p><details><summary>Race summary and metrics</summary><table>'+metrics+
-            '</table></details><div class="race-laps"></div><h3>Lap Data</h3><button class="race-prev">Previous</button> <select class="race-select" aria-label="Select lap"></select> <button class="race-next">Next</button> <button class="race-unpin">Unpin</button><p class="race-label"></p>'
-            '<div class="race-readout" aria-live="polite"></div><details><summary>Time basis and alignment</summary><p>Selected time: localized-pose header timestamp, seconds from '+esc(result.get('viewer',{}).get('time_origin_ns','unavailable'))+
-            ' ns. Sensor stamps represent bridge arrival. /clock measures host-monotonic elapsed time, not simulator physics time. Interpolation respects clock segments and gaps. Ground truth is evaluation only. Odometry heading requires validated map-frame TF alignment.</p></details>'
-            '<div class="race-inspect"><div class="race-map"></div><div class="race-panels"></div></div><script>'+get_plotlyjs()+'</script><script>\n(()=>{const D='+data+';\n'+script+'\n})();</script></section>')
+            '</table></details><div class="race-laps"></div><h3>Lap Data</h3>'
+            '<details><summary>Time basis and alignment</summary><p>Selected time: localized-pose header timestamp, seconds from '+esc(result.get('viewer',{}).get('time_origin_ns','unavailable'))+
+            ' ns. Sensor stamps represent bridge arrival. /clock measures host-monotonic elapsed time, not simulator physics time. Selectable positions are recorded localized poses. Telemetry values require an exact timestamp match in the same clock segment; unmatched values are unavailable. Reference curves and tracking errors are geometric calculations from those samples. Lines break at timestamp gaps, unavailable values, and wraparound; dots show isolated samples. Pointer selection snaps to the nearest recorded sample; arrow navigation steps between recorded samples. Reference progress is measured from the first saved raceline point (0% / 100%), not the simulator lap-counter boundary. The lap-start marker shows the first recorded pose in the selected lap; sampling and counter delivery can place it away from that reference origin. Ground truth is evaluation only. Odometry heading requires validated map-frame TF alignment.</p></details>'
+            '<div class="race-inspect"><div class="race-map"><div class="race-controls"><button class="race-prev">Previous lap</button><select class="race-select" aria-label="Select lap"></select><button class="race-next">Next lap</button><button class="race-back" aria-label="Previous telemetry sample">←</button><button class="race-forward" aria-label="Next telemetry sample">→</button><button class="race-unpin">Unpin</button></div><p class="race-label"></p><div class="race-readout" aria-live="polite"></div><div class="race-track" style="display:flex;flex:1;min-height:0;flex-direction:column"></div></div><div class="race-panels"></div></div><script>'+get_plotlyjs()+'</script><script>\n(()=>{const D='+data+';\n'+script+'\n})();</script></section>')

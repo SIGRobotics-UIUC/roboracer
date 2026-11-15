@@ -1,0 +1,2 @@
+# Browser-only test tooling; runtime numerical/ROS dependencies are separate.
+playwright==1.65.2

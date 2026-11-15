@@ -124,6 +124,8 @@ def resolve(requested, overrides=()):
                     raise ValueError(f'{name}.{key} must be {kind.__name__}')
             elif type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f'{name}.{key} must be finite numeric')
+            if kind is float:
+                component['params'][key] = float(value)
             if kind is not bool and value <= 0 and key not in ('max_speed', 'lookahead_offset', 'seed'):
                 raise ValueError(f'{name}.{key} must be positive')
             if key == 'max_speed' and value < 0:

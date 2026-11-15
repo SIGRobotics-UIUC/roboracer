@@ -68,3 +68,16 @@ def test_owned_process_group_cleanup_including_child(tmp_path):
     assert child_pid.exists()
     result = proc.close()
     assert not result['group_alive']
+
+
+def test_motion_evidence_ignores_reset_rest_and_invalid_speed():
+    from benchmark.collector.lifecycle import MotionEvidence
+    motion = MotionEvidence(.05)
+    for enabled, speed in [(False, 2.), (True, 0.), (True, .01),
+                           (True, float('nan')), (True, float('inf'))]:
+        motion.observe(enabled, speed, 100)
+        assert not motion.metadata()['observed']
+    motion.observe(True, -.1, 200)
+    motion.observe(True, 0., 300)
+    assert motion.metadata()['observed']
+    assert motion.metadata()['first_monotonic_ns'] == 200

@@ -2,7 +2,7 @@ from glob import glob
 from setuptools import find_packages, setup
 
 setup(
-    name='benchmark', version='0.1.0', packages=find_packages(),
+    name='benchmark', version='0.2.0', packages=find_packages(),
     data_files=[('share/ament_index/resource_index/packages', ['resource/benchmark']),
                 ('share/benchmark', ['package.xml', 'README.md', 'VALIDATION.md']),
                 ('share/benchmark/config', glob('config/*.yaml'))],

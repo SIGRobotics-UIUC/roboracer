@@ -139,8 +139,11 @@ def transform_world(values, origin):
     return values
 
 
-def aligned_pose(source, targets, max_gap_s=0.1):
-    """Interpolate within segment/domain, no extrapolation, duplicates or long gaps."""
+def aligned_pose(source, targets, max_gap_s=0.1, *, interpolate=True):
+    """Align within segment/domain; optionally require exact recorded timestamps.
+
+    Interpolation never extrapolates or bridges duplicates or long gaps.
+    """
     result = np.full((len(targets), 3), np.nan)
     groups = {}
     for sample in source:
@@ -160,7 +163,7 @@ def aligned_pose(source, targets, max_gap_s=0.1):
         if j < len(group) and stamps[j] == target.source_ns:
             if (j+1 == len(group) or stamps[j+1] != stamps[j]) and (j == 0 or stamps[j-1] != stamps[j]):
                 result[i] = group[j].value[:3]
-        elif (0 < j < len(group) and stamps[j] not in duplicates and stamps[j-1] not in duplicates
+        elif (interpolate and 0 < j < len(group) and stamps[j] not in duplicates and stamps[j-1] not in duplicates
               and 0 < stamps[j]-stamps[j-1] <= max_gap_s*1e9):
             a, b = np.array(group[j-1].value[:3]), np.array(group[j].value[:3])
             f = (target.source_ns-stamps[j-1])/(stamps[j]-stamps[j-1])
@@ -195,5 +198,5 @@ def project_reference(values, rows):
         heading = rows[j, 3]+np.pi/2
         heading += t[j]*wrap(rows[(j+1) % len(rows), 3]-rows[j, 3])
         speed = rows[j, 5]+t[j]*(rows[(j+1) % len(rows), 5]-rows[j, 5])
-        output.append([s0[j]+t[j]*lengths[j], lateral, wrap(yaw-heading), speed, not ambiguous])
+        output.append([(s0[j]+t[j]*lengths[j]) % lengths.sum(), lateral, wrap(yaw-heading), speed, not ambiguous])
     return np.asarray(output).reshape((-1, 5)), float(lengths.sum())

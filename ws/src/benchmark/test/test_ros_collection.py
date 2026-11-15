@@ -48,7 +48,7 @@ def simulator(tmp_path):
     state = {'lap': 0, 'collision': 0, 'speed': 0., 'enabled': False, 'last_lap': None,
              'loss': False, 'drive_values': [], 'status': None, 'reset_seen': False}
     def drive(msg):
-        state['speed'] = msg.drive.speed
+        state['speed'] = 0. if state.get('immobile') else msg.drive.speed
         state['last_drive'] = time.monotonic()
         state['drive_values'].append((time.monotonic(), msg.drive.speed))
         pubs[NS+'throttle_command'].publish(Float32(data=msg.drive.speed*.04))
@@ -118,7 +118,7 @@ def simulator(tmp_path):
             node.destroy_publisher(pubs.pop('/localized_pose'))
             node.destroy_publisher(pubs.pop('/benchmark/requested_drive'))
             config['experiment']['mode'] = 'managed'
-            config['components'] = {'controller': {'type': 'pure_pursuit', 'params': {'speed_scale': .5}},
+            config['components'] = {'controller': {'type': 'pure_pursuit', 'params': {'speed_scale': 1}},
                                     'localization': {'type': 'mcl'}}
             # Exercise real controller startup/remapping/cleanup. Only the
             # localizer process is stubbed: localization itself has its own suite.
@@ -129,6 +129,12 @@ def simulator(tmp_path):
                     'if cmd[:3]==["ros2","launch","perception"] else cmd,log,env); '
                     'from benchmark.cli import main; sys.exit(main())')
             entry = ['python3', '-c', code]
+        if not managed:
+            code = 'from benchmark.cli import main; import sys; sys.exit(main())'
+        setup = ('from benchmark.collector import manager; '
+                 'allocate=manager.unique_directory; '
+                 'manager.unique_directory=lambda root,**kw: allocate(root,explicit=kw.get("timestamp_prefix")); ')
+        entry = ['python3', '-c', setup+code]
         path = tmp_path/(name+'.yaml'); path.write_text(yaml.safe_dump(config))
         stream = (tmp_path/(name+'.log')).open('w')
         proc = subprocess.Popen([*entry, '--log-root', str(tmp_path/'log'),
@@ -231,7 +237,7 @@ def test_transient_loss_continues_and_recorder_failure_aborts(simulator, tmp_pat
     # Terminate only the recorder group owned by this temporary synthetic run.
     rows = subprocess.check_output(['ps', '-eo', 'pid,args'], text=True).splitlines()
     matches = [int(row.split(None, 1)[0]) for row in rows if 'ros2 run benchmark benchmark_recorder' in row
-               and str(tmp_path/'log'/'runs'/'recorder-failure'/'recorder.yaml') in row]
+               and str(tmp_path/'log'/'attempts'/'recorder-failure'/'recorder.yaml') in row]
     assert len(matches) == 1
     os.killpg(matches[0], signal.SIGINT)
     spin(lambda: proc.poll() is not None)
@@ -259,7 +265,8 @@ def test_disk_reserve_failure_prevents_motion(simulator, tmp_path):
     node, state, start, spin = simulator
     proc = start('disk-reserve', reserve=1e15)
     spin(lambda: proc.poll() is not None)
-    meta = verify(tmp_path/'log'/'runs'/'disk-reserve')
+    assert not (tmp_path/'log'/'runs'/'disk-reserve').exists()
+    meta = verify(tmp_path/'log'/'attempts'/'disk-reserve')
     assert meta['status'] == 'aborted' and meta['failure'] == 'disk_reserve_exhausted'
     assert not any(speed > 0 for stamp, speed in state['drive_values'])
 
@@ -290,3 +297,21 @@ def test_frozen_clock_uses_bridge_timeout_and_does_not_claim_confirmed_rest(simu
     assert state['speed'] == 0.
     # Requested commands continue, but the inhibited gate must fall silent.
     assert time.monotonic()-state['last_drive'] > .5
+
+
+def test_enabled_but_stationary_attempt_is_not_a_run(simulator, tmp_path):
+    node, state, start, spin = simulator
+    state['immobile'] = True
+    proc = start('stationary', laps=10)
+    spin(lambda: any(speed > 0 for _, speed in state['drive_values']))
+    client = node.create_client(Trigger, '/benchmark/stop')
+    assert client.wait_for_service(timeout_sec=2.)
+    future = client.call_async(Trigger.Request())
+    spin(lambda: future.done())
+    spin(lambda: proc.poll() is not None)
+    assert proc.returncode != 0
+    assert not (tmp_path/'log'/'runs'/'stationary').exists()
+    meta = verify(tmp_path/'log'/'attempts'/'stationary')
+    assert meta['status'] == 'stopped'
+    assert meta['motion_evidence']['observed'] is False
+    assert meta['stop_confirmation'] == 'wheel_odom_rest_and_gate_inhibited'

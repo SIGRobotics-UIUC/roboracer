@@ -221,3 +221,99 @@ def test_occupancy_map_payload_is_raster_with_origin(tmp_path):
     assert view['map']['image'].startswith('data:image/png;base64,')
     assert view['map']['origin'] == [1,2,.5]
     assert view['map']['width'] == 3 and view['map']['height'] == 2
+
+
+@pytest.mark.parametrize('outcome,label,severity', [
+    ('completed', 'Completed — requested lap count reached', None),
+    ('stopped', 'Interrupted — operator stopped collection', 'warning'),
+    ('aborted', 'Failed — collection or finalization aborted', 'error'),
+    ('recovered_incomplete', 'Incomplete — recovered artifacts', 'warning'),
+])
+def test_collection_outcome_independent_of_closed_recorder(tmp_path, outcome, label, severity):
+    from benchmark.collector.topics import BASE, EXTRA
+    render(tmp_path, {'modules': [], 'experiment': {
+        'status': outcome, 'config': {'logging': {'level': 'basic'}},
+        'recorder': {'closed': True, 'counts': dict.fromkeys([*BASE, *EXTRA], 10)}}})
+    doc = (tmp_path/'report.html').read_text()
+    assert label in doc
+    assert 'Recorder finished; bag metadata written' in doc
+    if severity:
+        assert '<details class="collection-notice '+severity+'">' in doc
+        assert doc.index('Collection outcome') < doc.index('<details class="collection-notice')
+    else:
+        assert '<details class="collection-notice' not in doc
+
+
+def test_invalid_samples_are_collapsed_and_expected_sentinel_is_not_warning(tmp_path):
+    from benchmark.collector.topics import BASE, EXTRA
+    summary = {'modules': [], 'experiment': {
+        'status': 'completed', 'config': {'logging': {'level': 'basic'}},
+        'recorder': {'closed': True, 'counts': dict.fromkeys([*BASE, *EXTRA], 10)}},
+        'signal_validation': {'last_lap_time': {'uninitialized': 10, 'invalid': 0}}}
+    render(tmp_path, summary)
+    assert '<details class="collection-notice' not in (tmp_path/'report.html').read_text()
+    warning = 'last_lap_time: 2/10 samples invalid; rejection counts: numeric'
+    summary['warnings'] = [warning]
+    render(tmp_path, summary)
+    doc = (tmp_path/'report.html').read_text()
+    notice = doc.split('<details class="collection-notice warning">')[1].split('</details>')[0]
+    assert '⚠ Warning: Collection evidence needs attention' in notice
+    assert warning in notice and ' open' not in notice
+
+
+def test_recorder_error_is_error_even_when_closed(tmp_path):
+    render(tmp_path, {'modules': [], 'experiment': {
+        'config': {'logging': {'level': 'off'}},
+        'recorder': {'closed': True, 'error': '<write failure>'}}})
+    doc = (tmp_path/'report.html').read_text()
+    assert '<details class="collection-notice error">' in doc
+    assert '&lt;write failure&gt;' in doc
+
+
+def test_reference_progress_origin_and_wrap_are_geometric():
+    rows = np.array([[0,0,0,-np.pi/2,0,2], [2,2,0,0,0,2],
+                     [4,2,2,np.pi/2,0,2], [6,0,2,np.pi,0,2]])
+    projected, length = project_reference([[0,0,0], [0,.01,0], [.01,0,0]], rows)
+    assert length == 8
+    assert projected[:,0] == pytest.approx([0,7.99,.01])
+    assert (projected[:,0] < length).all()
+
+
+def test_true_absolute_tracking_errors_match_signed_values():
+    from benchmark.analysis.modules.race_view import payload
+    rows = np.array([[0,0,0,-np.pi/2,0,2], [2,2,0,0,0,2],
+                     [4,2,2,np.pi/2,0,2], [6,0,2,np.pi,0,2]])
+    pose = [sample(1., [.5,-.1,-.2])]
+    truth = [sample(1., [.5,-.2,-.3,0,0,0])]
+    view = payload(Dataset(signals={'pose':pose}), rows, truth, {})
+    signals = view['signals']
+    for component,unit in [('lateral','m'),('heading','rad')]:
+        signed = signals[f'True {component}|{unit}|Tracking|Signed {component} error'][0]
+        absolute = signals[f'True absolute {component}|{unit}|Tracking|Absolute {component} error'][0]
+        assert absolute == abs(signed)
+        assert absolute > 0
+
+
+def test_viewer_uses_exact_recorded_values_while_analysis_can_interpolate():
+    from benchmark.analysis.modules.race_view import payload
+    rows = np.array([[0,0,0,-np.pi/2,0,2], [2,2,0,0,0,2],
+                     [4,2,2,np.pi/2,0,2], [6,0,2,np.pi,0,2]])
+    poses = [sample(1., [.4,.1,3.1]), sample(1.05, [.5,.1,-3.1])]
+    odom = [sample(.98, [0,0,0,1,0,0]), sample(1.02, [0,0,0,3,0,0]),
+            sample(1.05, [0,0,0,4,0,0])]
+    truth = [sample(.98, [.3,0,0,1,0,0]), sample(1.02, [.5,0,0,3,0,0])]
+    view = payload(Dataset(signals={'pose': poses, 'odom': odom}), rows, truth, {})
+    speeds = view['signals']['Wheel odometry speed|m/s|Motion and commands|Speed']
+    assert speeds == [None, 4.]
+    assert view['samples'][0]['truth'] == [None, None]
+    assert view['signals']['Localized pose heading|rad|Motion and commands|Heading'] == [3.1, -3.1]
+    assert aligned_pose(truth, poses)[0, 0] == pytest.approx(.4)
+    assert np.isnan(aligned_pose(truth, poses, interpolate=False)).all()
+    assert view['value_alignment'] == 'exact_recorded_timestamp'
+
+
+def test_exact_alignment_still_rejects_duplicates_and_other_segments():
+    source = [sample(1., [1,2,3]), sample(1., [4,5,6])]
+    assert np.isnan(aligned_pose(source, [sample(1., [0,0,0])], interpolate=False)).all()
+    target = sample(1., [0,0,0], segment=1)
+    assert np.isnan(aligned_pose(source[:1], [target], interpolate=False)).all()

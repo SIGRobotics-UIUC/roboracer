@@ -54,7 +54,7 @@ document.addEventListener('click',async event=>{
  catch {const input=document.createElement('textarea');input.value=button.dataset.commit;document.body.append(input);input.select();const ok=document.execCommand('copy');input.remove();button.nextElementSibling.textContent=ok?'Copied':'Copy unavailable';}
 });
 window.benchmarkReport = (() => {
- let selection = Object.freeze({lap:null,timestamp:null}), listeners = new Set();
+ let selection = Object.freeze({lap:null,timestamp:null,sampleIndex:null,pinned:false}), listeners = new Set();
  return Object.freeze({getSelection:()=>selection,
  subscribe:fn=>{listeners.add(fn);return ()=>listeners.delete(fn)},
  requestSelection:change=>{selection=Object.freeze({...selection,...change});
@@ -66,7 +66,7 @@ h1{display:inline-block;margin-right:1rem}small{color:#687483}
 section{background:white;border:0;border-radius:10px;padding:20px;margin:20px 0}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
 .cards dt{color:#687483;font-size:13px}.cards dd{margin:4px 0;font-weight:600}
-.commit{display:flex;align-items:center;gap:10px;margin:16px 0}.commit code{background:#edf1f6;border-radius:5px;padding:6px}.copy-commit{border:0;background:#edf1f6;border-radius:5px}details{margin:12px 0}summary,button{cursor:pointer}button,select{padding:8px 13px;border:1px solid #d7dfeb;border-radius:7px;background:#fff;color:#263b56;font:inherit;font-size:13px;transition:background .15s,border-color .15s}button:hover:not(:disabled){background:#eef4ff;border-color:#96b5e3}button:active:not(:disabled){background:#ddeaff}button:disabled{opacity:.4;cursor:default}button:focus-visible,select:focus-visible{outline:2px solid #0671ee;outline-offset:2px}td,th{border-color:#e3e7ed}
+.commit{display:flex;align-items:center;gap:10px;margin:16px 0}.commit code{background:#edf1f6;border-radius:5px;padding:6px}.copy-commit{border:0;background:#edf1f6;border-radius:5px}details{margin:12px 0}summary,button{cursor:pointer}button,select{padding:8px 13px;border:1px solid #d7dfeb;border-radius:7px;background:#fff;color:#263b56;font:inherit;font-size:13px;transition:background .15s,border-color .15s}button:hover:not(:disabled){background:#eef4ff;border-color:#96b5e3}button:active:not(:disabled){background:#ddeaff}button:disabled{opacity:.4;cursor:default}button:focus-visible,select:focus-visible{outline:2px solid #0671ee;outline-offset:2px}td,th{border-color:#e3e7ed}.collection-notice{padding:12px 16px;border-left:4px solid;border-radius:6px}.collection-notice.warning{background:#fff4db;border-color:#b36b00;color:#714300}.collection-notice.error{background:#fff0f0;border-color:#bc3030;color:#8b2020}
 </style>"""
 
 
@@ -158,11 +158,41 @@ def core(summary):
     issues.extend(w for w in summary.get('warnings', []) if any(term in w.lower() for term in ('samples invalid', 'invalid (', 'alignment unavailable', 'alignment split', 'unverified', 'no finalized readable bag')))
     if meta.get('recorder_integrity', {}).get('consistent') is False:
         issues.append('Recorded message counts do not match recorder acknowledgements')
-    validity = ('Telemetry disabled by logging configuration' if level == 'off' else
-                'Collection evidence needs attention' if issues else 'Recording available')
-    status = 'Closed' if recorder.get('closed') else 'Not confirmed closed'
+    # Recorder closure and collection outcome are independent evidence.
+    status = ('Recorder finished; bag metadata written' if recorder.get('closed') else
+              'Recorder finalization not confirmed')
     if level == 'off':
         status = 'Disabled by configuration'
+    outcome = meta.get('status')
+    outcomes = {
+        'completed': 'Completed — requested lap count reached',
+        'stopped': 'Interrupted — operator stopped collection',
+        'aborted': 'Failed — collection or finalization aborted',
+        'recovered_incomplete': 'Incomplete — recovered artifacts; stop status unknown',
+    }
+    outcome_label = outcomes.get(outcome, 'Not recorded' if outcome is None else
+                                 'Unrecognized outcome: '+str(outcome))
+    errors = []
+    if recorder.get('error'):
+        errors.append('Recorder error: '+str(recorder['error']))
+    if outcome == 'aborted':
+        errors.append('Collection aborted: '+str(meta.get('failure') or 'reason not recorded'))
+    elif meta.get('failure'):
+        issues.append('Recorded stop reason: '+str(meta['failure']))
+    issues = [issue for issue in issues if issue not in errors]
+    if outcome in ('stopped', 'recovered_incomplete'):
+        issues.insert(0, 'The requested collection did not finish; recorded data may be partial.')
+    diagnostics = errors + issues
+    notice = ''
+    if diagnostics:
+        severity = 'error' if errors else 'warning'
+        title = ('Collection failed' if errors else 'Collection evidence needs attention')
+        notice = ('<details class="collection-notice '+severity+'"><summary>'+
+                  ('⛔ Error: ' if errors else '⚠ Warning: ')+title+'</summary><ul>'+
+                  ''.join('<li>'+esc(item)+'</li>' for item in diagnostics)+'</ul></details>')
+    availability = ('Telemetry disabled by logging configuration' if level == 'off' else
+                    'Recording available' if recorder.get('closed') else
+                    'Recording availability unconfirmed')
     provenance = table(fields({k:v for k,v in summary.items() if k not in ('modules','experiment','signal_map')}))
     provenance += '<h4>Collection provenance</h4>'+table(fields(meta))
     return ('<small>Run ID: '+esc(summary.get('run_id', 'Unavailable'))+' | Analysis ID: '+
@@ -170,11 +200,10 @@ def core(summary):
             '<dl class="cards">'+cards+'</dl><div class="commit"><span>'+esc(branch)+'</span> <small>'+esc(dirty_label)+'</small> <code>'+esc(commit[:7] if commit != 'Unavailable' else commit)+
             '</code> <button class="copy-commit" data-commit="'+esc(commit)+'" aria-label="Copy full commit" title="Copy full commit">⧉</button><small class="copy-result" aria-live="polite"></small></div>'+
             '<details><summary>All experiment settings</summary>'+table(fields(config))+'</details></section>'+
-            '<section><h2>Collected Data</h2><strong>'+esc(validity)+'</strong><dl class="cards">'+
+            '<section><h2>Collected Data</h2><strong>'+esc(availability)+'</strong><dl class="cards">'+
             ''.join('<div><dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd></div>' for k,v in (
                 ('Recording status',status),('Duration', f'{duration:,.2f} s' if duration is not None else 'Not recorded'),
-                ('Logging level',level),('Collection outcome',readable(meta.get('status', 'Unavailable')))))+'</dl>'+
-            ''.join('<p class="warning">'+esc(issue)+'</p>' for issue in issues)+
-            ('<p>Collection failure: '+esc(meta['failure'])+'</p>' if meta.get('failure') else '')+
+                ('Logging level',level),('Collection outcome',outcome_label)))+'</dl>'+
+            notice+
             '<details><summary>Provenance and saved evidence</summary>'+provenance+'</details>'+
             '<details><summary>Full recording inventory</summary>'+table(inventory)+'</details></section>')

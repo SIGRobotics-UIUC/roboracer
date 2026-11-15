@@ -65,3 +65,21 @@ class RestConfirmation:
         confirmed = (elapsed >= self.hold and self.rest_since is not None
                      and now - self.rest_since >= self.dwell)
         return 'confirmed' if confirmed else 'unconfirmed' if elapsed >= self.timeout else 'waiting'
+
+
+class MotionEvidence:
+    """Latch wheel-odometry movement after enabling, using the rest-speed boundary."""
+    def __init__(self, rest_speed):
+        self.rest_speed = rest_speed
+        self.first_monotonic_ns = None
+
+    def observe(self, enabled, speed, monotonic_ns):
+        if (enabled and math.isfinite(speed) and abs(speed) >= self.rest_speed
+                and abs(speed) > 0 and self.first_monotonic_ns is None):
+            self.first_monotonic_ns = monotonic_ns
+
+    def metadata(self):
+        return {'observed': self.first_monotonic_ns is not None,
+                'source': '/odom.twist.twist.linear.x',
+                'threshold_mps': self.rest_speed,
+                'first_monotonic_ns': self.first_monotonic_ns}

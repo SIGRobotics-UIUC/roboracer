@@ -9,9 +9,9 @@ import signal
 import time
 import yaml
 
-from .artifacts import finalize, git_snapshot, unique_directory, utc, write_json
+from .artifacts import finalize, git_snapshot, unique_directory, utc, write_json, promote_attempt
 from .adapters import controller_parameters, managed_commands
-from .lifecycle import Health, RestConfirmation
+from .lifecycle import Health, RestConfirmation, MotionEvidence
 from .process import Process
 from .topics import BASE, NS, REQUESTED, profile, stamp_ns, subscription_qos, valid
 
@@ -54,6 +54,7 @@ def run(config, args, *, on_finalized=None):
     if unknown_limits:
         node.destroy_node(); rclpy.try_shutdown(); singleton.close()
         raise ValueError('Unknown essential-signal timeout keys: '+','.join(sorted(unknown_limits)))
+    motion = MotionEvidence(limits['rest_speed_mps'])
     health = Health(essential, limits['loss_s'], limits['signals'])
     latest, stamps, capture_seen, capture_counts, subs = {}, {}, {}, {}, []
     state = {'status': 'preflight', 'stop_requested': False}
@@ -128,6 +129,8 @@ def run(config, args, *, on_finalized=None):
             if topic != '/clock' and not -100_000_000 <= clock_now-stamp <= limits['signals'].get(topic, limits['loss_s'])*1e9:
                 return
             stamps[topic] = stamp
+        if topic == '/odom':
+            motion.observe('motion_enabled_utc' in metadata, message.twist.twist.linear.x, time.monotonic_ns())
         previous = latest.get(topic)
         latest[topic] = (now, message)
         health.observe(topic, now)
@@ -335,12 +338,12 @@ def run(config, args, *, on_finalized=None):
             required.append('map.pbstream')
         if any(not (track/name).is_file() for name in required):
             raise Abort('missing_track_assets:'+','.join(required))
-        run_path = unique_directory(args.log_root/'runs', timestamp_prefix=args.run_id)
+        run_path = unique_directory(args.log_root/'attempts', timestamp_prefix=args.run_id)
         collection_lock = (run_path/'collection.lock').open('x')
         fcntl.flock(collection_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         event_stream = (run_path/'events.jsonl').open('x')
         say(f'Run ID: {run_path.name}')
-        say(f'Raw collection directory (sealed on completion): {run_path}')
+        say(f'Pending collection (published under runs only after observed motion): {run_path}')
         say(f'Lifecycle event log: {run_path / "events.jsonl"}')
         say('Saving source and track/configuration snapshots before starting motion.')
         metadata['run_id'] = run_path.name
@@ -531,17 +534,22 @@ def run(config, args, *, on_finalized=None):
                     event_stream.close()
                 if any(process.group_alive() for process in processes.values()):
                     raise RuntimeError('Owned process still alive; preserving incomplete run without sealing')
+                metadata['motion_evidence'] = motion.metadata()
+                metadata['collection_kind'] = 'run' if motion.metadata()['observed'] else 'no_motion_attempt'
+                run_path = promote_attempt(run_path, args.log_root, motion.metadata()['observed'])
                 finalize(run_path, metadata)
-                finalized = True
+                finalized = motion.metadata()['observed']
                 if collection_lock:
                     collection_lock.close()
                 state['status'] = metadata['status']
                 status_pub.publish(String(data=json.dumps({**state, 'run_id': run_path.name})))
                 say(result_message(metadata['status'], metadata['measurement']['completed_laps'],
                     config['experiment']['laps'], metadata.get('failure'), metadata.get('stop_confirmation')))
-                say(f'Saved raw collection: {run_path}')
+                say(f'Saved raw collection: {run_path}' if finalized else
+                    f'No wheel-odometry movement recorded; no run created. Startup diagnostics: {run_path}')
                 say(f'Failure/configuration details: {run_path / "metadata.json"}')
-                print(json.dumps({'run_id': run_path.name, 'status': metadata['status'],
+                print(json.dumps({'run_id': run_path.name if finalized else None,
+                                  'attempt_id': run_path.name, 'status': metadata['status'],
                                   'reason': metadata.get('failure'),
                                   'stop_confirmation': metadata.get('stop_confirmation'), 'path': str(run_path)}))
         finally:

@@ -120,3 +120,14 @@ def verify(run):
         if not path.is_relative_to(run.resolve()) or digest(path) != expected:
             raise ValueError(f'Run integrity failure: {name}')
     return json.loads((run / 'metadata.json').read_text())
+
+
+def promote_attempt(attempt, log_root, motion_observed):
+    """After all writers stop, publish moved collections without overwriting runs."""
+    attempt = Path(attempt)
+    if not motion_observed:
+        return attempt
+    target = unique_directory(Path(log_root)/'runs', explicit=attempt.name)
+    # The target is exclusively reserved and empty; rename precedes sealing and preserves the collected bytes.
+    attempt.rename(target)
+    return target
