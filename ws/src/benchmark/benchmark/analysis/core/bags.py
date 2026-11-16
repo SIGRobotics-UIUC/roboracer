@@ -7,6 +7,7 @@ import numpy as np
 import yaml
 
 from .signals import Dataset, Sample, SIGNAL_MAP, pose_value
+from .wheel_contact import decode_contact
 from ...collector.artifacts import verify
 
 
@@ -74,6 +75,9 @@ def load_run(run):
         name = mapping.get(topic, 'clock')
         header = getattr(message, 'header', None)
         stamp = header.stamp.sec*10**9+header.stamp.nanosec if header else None
+        if name == 'wheel_contact':
+            contact, contact_valid = decode(name, message)
+            stamp = contact.get('stamp_ns') if contact_valid else None
         if topic == '/clock':
             stamp = message.clock.sec*10**9+message.clock.nanosec
         boundary = name == 'reset' or (previous_record is not None and received < previous_record)
@@ -137,6 +141,11 @@ def decode(name, message):
         return value, bool(np.isfinite(value).all()) and value[0] >= 0
     if name == 'clock':
         return message.clock.sec*10**9+message.clock.nanosec, True
+    if name == 'wheel_contact':
+        try:
+            return decode_contact(message.data), True
+        except (ValueError, TypeError, RecursionError):
+            return message.data, False
     if name == 'event':
         try:
             return json.loads(message.data), True
@@ -159,7 +168,7 @@ def validate_message(name, message, stamp, latest_lap_count=None):
     if name == 'last_lap_time':
         numeric_valid = bool(np.isfinite(value) and value > 0)
     if not numeric_valid and not uninitialized:
-        reasons.append('payload' if name == 'event' else 'numeric')
+        reasons.append('payload' if name in ('event', 'wheel_contact') else 'numeric')
     header = getattr(message, 'header', None)
     if header and (stamp is None or stamp <= 0):
         reasons.append('timestamp')

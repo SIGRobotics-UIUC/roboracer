@@ -8,7 +8,7 @@ from ..collector.artifacts import unique_directory, write_json, utc, verify, git
 from .core.bags import load_run
 from .core.results import REGISTRY, register, run_modules
 from .core.signals import SIGNAL_MAP, SIGNAL_MAP_VERSION
-from .modules import race_performance, computation_timing
+from .modules import race_performance, computation_timing, wheel_contact
 from ..reports.render import render
 
 
@@ -16,7 +16,7 @@ def analyze(log_root, run_id, analysis_id=None, modules='all', config=None):
     from ..collector.config import identifier
     run = Path(log_root) / 'runs' / identifier(run_id)
     verify(run)
-    for module in (race_performance.MODULE, computation_timing.MODULE):
+    for module in (race_performance.MODULE, computation_timing.MODULE, wheel_contact.MODULE):
         if module.name not in REGISTRY:
             register(module)
     names = [name for name in REGISTRY if name != 'computation_timing'] if modules == 'all' else [] if modules in ('none', '') else modules.split(',')

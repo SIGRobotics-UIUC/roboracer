@@ -14,6 +14,7 @@ remain available for diagnosis, not as a substitute for native slip measurements
 - [Consolidated validation](VALIDATION.md)
 - [Plugin installation and native comparison](native_slip_validation_20261101.md)
 - [Serialized wheel settings](friction_curve_empirical_check.md)
+- [Proposed wheel-contact telemetry and validation plan](wheel_contact_telemetry_plan.md)
 
 ## Record and regenerate
 

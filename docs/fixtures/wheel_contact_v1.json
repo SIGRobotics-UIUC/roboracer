@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "evaluation_only": true,
+  "session_id": "synthetic-fixture",
+  "sample_sequence": 1,
+  "reset_generation": 0,
+  "configuration_revision": 1,
+  "coordinates": "Unity world: left-handed, x right, y up, z forward; vectors retained raw",
+  "units": "Raw Unity API",
+  "source": {
+    "phase": "LateUpdate",
+    "phase_verified": false,
+    "physics_step_identity_verified": false,
+    "observed_fixed_callback": 1,
+    "observed_fixed_time": 0.02,
+    "fixedDeltaTime": 0.02,
+    "rendering_frame": 1,
+    "skipped_fixed_callbacks": 0,
+    "clock": "Unity fixed time; unrelated to bridge clock"
+  },
+  "build": {
+    "plugin_sha256": null,
+    "unity_version": "synthetic fixture"
+  },
+  "runtime_snapshot": {
+    "note": "Synthetic schema fixture; not runtime configuration evidence"
+  },
+  "wheels": [
+    {
+      "name": "front_left",
+      "collider_id": 10,
+      "vehicle_id": 1,
+      "grounded": true,
+      "valid": true,
+      "sampling_error": null,
+      "configuration_revision": 1,
+      "wheel_hit": {
+        "force": 9.5,
+        "forwardSlip": 0.075,
+        "sidewaysSlip": -0.02,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "point": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "forwardDir": {
+          "x": 0,
+          "y": 0,
+          "z": 1
+        },
+        "sidewaysDir": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        },
+        "collider": {
+          "instance_id": 20,
+          "name": "diagnostic_ground"
+        }
+      },
+      "forwardFriction": {
+        "extremumSlip": 0.15,
+        "extremumValue": 0.9,
+        "asymptoteSlip": 0.25,
+        "asymptoteValue": 0.58,
+        "stiffness": 0.8
+      },
+      "sidewaysFriction": {
+        "extremumSlip": 0.01,
+        "extremumValue": 1.0,
+        "asymptoteSlip": 0.1,
+        "asymptoteValue": 0.5,
+        "stiffness": 1.0
+      },
+      "rpm": 0,
+      "steerAngle": 0,
+      "motorTorque": 0,
+      "brakeTorque": 0
+    },
+    {
+      "name": "front_right",
+      "collider_id": 11,
+      "vehicle_id": 1,
+      "grounded": true,
+      "valid": true,
+      "sampling_error": null,
+      "configuration_revision": 1,
+      "wheel_hit": {
+        "force": 9.5,
+        "forwardSlip": 0.075,
+        "sidewaysSlip": -0.02,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "point": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "forwardDir": {
+          "x": 0,
+          "y": 0,
+          "z": 1
+        },
+        "sidewaysDir": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        },
+        "collider": {
+          "instance_id": 20,
+          "name": "diagnostic_ground"
+        }
+      },
+      "forwardFriction": {
+        "extremumSlip": 0.15,
+        "extremumValue": 0.9,
+        "asymptoteSlip": 0.25,
+        "asymptoteValue": 0.58,
+        "stiffness": 0.8
+      },
+      "sidewaysFriction": {
+        "extremumSlip": 0.01,
+        "extremumValue": 1.0,
+        "asymptoteSlip": 0.1,
+        "asymptoteValue": 0.5,
+        "stiffness": 1.0
+      },
+      "rpm": 0,
+      "steerAngle": 0,
+      "motorTorque": 0,
+      "brakeTorque": 0
+    },
+    {
+      "name": "rear_left",
+      "collider_id": 12,
+      "vehicle_id": 1,
+      "grounded": true,
+      "valid": true,
+      "sampling_error": null,
+      "configuration_revision": 1,
+      "wheel_hit": {
+        "force": 9.5,
+        "forwardSlip": 0.075,
+        "sidewaysSlip": -0.02,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "point": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "forwardDir": {
+          "x": 0,
+          "y": 0,
+          "z": 1
+        },
+        "sidewaysDir": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        },
+        "collider": {
+          "instance_id": 20,
+          "name": "diagnostic_ground"
+        }
+      },
+      "forwardFriction": {
+        "extremumSlip": 0.15,
+        "extremumValue": 0.9,
+        "asymptoteSlip": 0.25,
+        "asymptoteValue": 0.58,
+        "stiffness": 0.8
+      },
+      "sidewaysFriction": {
+        "extremumSlip": 0.01,
+        "extremumValue": 1.0,
+        "asymptoteSlip": 0.1,
+        "asymptoteValue": 0.5,
+        "stiffness": 1.0
+      },
+      "rpm": 0,
+      "steerAngle": 0,
+      "motorTorque": 0,
+      "brakeTorque": 0
+    },
+    {
+      "name": "rear_right",
+      "collider_id": 13,
+      "vehicle_id": 1,
+      "grounded": true,
+      "valid": true,
+      "sampling_error": null,
+      "configuration_revision": 1,
+      "wheel_hit": {
+        "force": 9.5,
+        "forwardSlip": 0.075,
+        "sidewaysSlip": -0.02,
+        "normal": {
+          "x": 0,
+          "y": 1,
+          "z": 0
+        },
+        "point": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "forwardDir": {
+          "x": 0,
+          "y": 0,
+          "z": 1
+        },
+        "sidewaysDir": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        },
+        "collider": {
+          "instance_id": 20,
+          "name": "diagnostic_ground"
+        }
+      },
+      "forwardFriction": {
+        "extremumSlip": 0.15,
+        "extremumValue": 0.9,
+        "asymptoteSlip": 0.25,
+        "asymptoteValue": 0.58,
+        "stiffness": 0.8
+      },
+      "sidewaysFriction": {
+        "extremumSlip": 0.01,
+        "extremumValue": 1.0,
+        "asymptoteSlip": 0.1,
+        "asymptoteValue": 0.5,
+        "stiffness": 1.0
+      },
+      "rpm": 0,
+      "steerAngle": 0,
+      "motorTorque": 0,
+      "brakeTorque": 0
+    }
+  ]
+}

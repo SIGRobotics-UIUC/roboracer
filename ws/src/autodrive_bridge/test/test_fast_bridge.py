@@ -190,3 +190,33 @@ def test_startup_frame_without_lidar_still_gets_control_reply(bridge):
     initial = dict(FRAME)
     del initial['V1 LIDAR Range Array']
     assert 'V1 Throttle' in bridge.on_frame(initial)
+
+
+def test_contact_opt_in_frame_stamp_and_legacy_compatibility(bridge):
+    import json
+    from pathlib import Path
+    contact = (Path(__file__).resolve().parents[4]/'docs/fixtures/wheel_contact_v1.json').read_text()
+    # Default off, including when a new plugin sends contact telemetry.
+    assert bridge.contact_pub is None
+    assert 'V1 Throttle' in bridge.on_frame(dict(FRAME, **{'V1 Wheel Contact': contact}))
+    bridge.contact_pub = Record()
+    bridge.slip_pub = Record()
+    frame = dict(FRAME, **{'V1 Wheel Contact': contact, 'V1 Wheel Slip': '1 .1 -.2 '*4})
+    bridge.on_frame(frame)
+    result = json.loads(bridge.contact_pub.data[0])
+    assert result['stamp_ns'] == json.loads(bridge.slip_pub.data[0])['stamp_ns']
+    assert result['arrival_monotonic_ns'] > 0
+    assert result['source']['observed_fixed_time'] == .02
+    # Old plugin frames are still accepted; absent telemetry is never invented.
+    bridge.on_frame(dict(FRAME))
+    assert len(bridge.contact_pub.data) == 1
+
+
+@pytest.mark.parametrize('bad', ['null', '{"schema_version":1}', '{"value":NaN}', '{"value":1e999}'])
+def test_bad_contact_does_not_break_commands_or_sensors(bridge, bad):
+    bridge.contact_pub = Record()
+    bridge.pub['imu'] = imu = Count()
+    bridge._throttle_cb(Float32(data=.25))
+    reply = bridge.on_frame(dict(FRAME, **{'V1 Wheel Contact': bad}))
+    assert reply['V1 Throttle'] == '0.25'
+    assert imu.n == 1 and bridge.contact_pub.data == []

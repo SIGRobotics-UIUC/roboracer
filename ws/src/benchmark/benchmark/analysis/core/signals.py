@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 NS = '/autodrive/roboracer_1/'
-SIGNAL_MAP_VERSION = 2
+SIGNAL_MAP_VERSION = 3
 SIGNAL_MAP = {
     'pose': {'topic': '/localized_pose', 'field': 'pose', 'units': 'm,rad', 'frame': 'map'},
     'tracked_pose': {'topic': '/tracked_pose', 'field': 'pose', 'units': 'm,rad', 'frame': 'map'},
@@ -16,6 +16,7 @@ SIGNAL_MAP = {
     'collision_count': {'topic': NS+'collision_count', 'field': 'data', 'units': 'count', 'frame': None},
     'last_lap_time': {'topic': NS+'last_lap_time', 'field': 'data', 'units': 's (native simulator)', 'frame': None},
     'reset': {'topic': NS+'sim_reset', 'field': 'data', 'units': None, 'frame': None},
+    'wheel_contact': {'topic': NS+'wheel_contact', 'field': 'data (versioned JSON)', 'units': 'raw Unity API', 'frame': None},
     'event': {'topic': '/benchmark/events', 'field': 'data', 'units': None, 'frame': None},
 }
 for _name, _spec in SIGNAL_MAP.items():
@@ -25,6 +26,10 @@ for _name, _spec in SIGNAL_MAP.items():
     _spec['sign_conventions'] = 'x forward, y left; positive yaw/steering counterclockwise'
 SIGNAL_MAP['odom']['covariance'] = 'pose.covariance, twist.covariance retained raw; zeros do not imply measured certainty'
 SIGNAL_MAP['truth']['evaluation_only'] = True
+SIGNAL_MAP['wheel_contact'].update(evaluation_only=True,
+    sign_conventions='Raw Unity world vectors, left-handed: x right, y up, z forward; no ROS conversion',
+    timestamp={'source': 'data.stamp_ns (bridge arrival)', 'recorded': 'rosbag timestamp',
+               'domain': 'run.clock_domain', 'provenance': 'Unity source evidence retained separately; no clock equivalence established'})
 
 
 def wrap(angle):

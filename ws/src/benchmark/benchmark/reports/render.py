@@ -14,7 +14,29 @@ def render(output, summary):
                 '<h1>Benchmark Report</h1>', core(summary)]
     sections.append(SHARED)
     from ..analysis.core.results import REGISTRY
+    contributions, by_module = {}, {}
     for result in summary['modules']:
+        module = REGISTRY.get(result['name'])
+        if module and module.report_extensions:
+            item = module.report_extensions(result)
+            contributions.setdefault(item['host'], []).append(item)
+            by_module[result['name']] = item
+    rendered_hosts = set()
+    selected_hosts = {REGISTRY[r['name']].report_host for r in summary['modules'] if r['name'] in REGISTRY}
+    # A selected host precedes its contributors even with reversed CLI order.
+    ordered = sorted(summary['modules'], key=lambda r: 0 if REGISTRY.get(r['name']) and REGISTRY[r['name']].report_host else 1)
+    for result in ordered:
+        module = REGISTRY.get(result['name'])
+        if module and module.report_extensions:
+            item = by_module[result['name']]
+            host = item['host']
+            if host not in selected_hosts and host not in rendered_hosts:
+                renderer = next((m for m in REGISTRY.values() if m.report_host == host), None)
+                if renderer:
+                    sections.append(renderer.render_report({**item['fallback'], 'extensions': [c['viewer'] for c in contributions[host]]}))
+                    rendered_hosts.add(host)
+        if module and module.report_host:
+            result = {**result, 'extensions': [c['viewer'] for c in contributions.get(module.report_host, [])]}
         if result['name'] == 'computation_timing':
             continue
         module = REGISTRY.get(result['name'])

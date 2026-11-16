@@ -351,3 +351,55 @@ heading wraparound. Pointer selection snaps to the nearest recorded point
 (horizontal distance in plots), including when the pointer is in a gap. Keyboard and button navigation still step through
 recorded poses, including across gaps. Regenerate reports from the run to produce
 the recorded-only payload; previously saved HTML and metrics are not rewritten.
+
+## Optional wheel-contact diagnostics
+
+With plugin `Telemetry.WheelContact=true`, bridge
+`publish_wheel_contact:=true`, and `logging.level: detailed`, collections include
+optional `/autodrive/roboracer_1/wheel_contact` JSON messages. Analyze with
+`--modules wheel_contact` (also included in `all`). Older/basic collections keep
+contact metrics unavailable. See repository `docs/wheel_contact_telemetry.md`.
+
+The evaluation-only module preserves raw contact/configuration snapshots in its
+report directory and summarizes raw force/slip, validity and source continuity.
+Slip-to-configured-peak ratios are coordinates, not grip utilization or saturation.
+Unity sampling phase and force/load semantics still require simulator validation.
+
+`wheel_contact` version 1.1 extends the existing **Race Performance** lap
+viewer. Its track-side **Track overlay** dropdown defaults to the original
+raceline + localized positions + ground truth. Choose **Slip** to color that same SVG track by the largest valid slip ratio
+across all four wheels and both directions at each observation: green at 0,
+yellow at 1, red above 1. Missing values stay gray. A collapsed
+**Wheel slip** section on the plot side contains the four four-wheel plots:
+signed forward/sideways slip and their per-observation peak-slip ratios. There
+is one shared lap selector, track, cursor, pin/unpin and keyboard navigation.
+The separate **Overall Slip Summary** below the viewer still covers every unique
+eligible measured observation, independent of lap or overlay selection.
+
+Module authors can register declarative overlays, plots and observation evidence
+through `Module.report_extensions`; see repository
+[`docs/benchmark_viewer_extensions.md`](../../../docs/benchmark_viewer_extensions.md).
+Selecting wheel contact alone uses the same shared viewer without first running
+Race Performance analysis.
+
+```bash
+ros2 run benchmark benchmark analyze <run-id> --modules wheel_contact
+```
+
+Use the CLI's `--help` for log-root/analysis-ID options. Outputs include unchanged
+`contacts.jsonl`, deduplicated `slip_samples.jsonl` with alignment evidence, and
+`slip_viewer.json` in the new analysis directory. No raw collection is rewritten.
+Spatial association uses exact localized poses or bounded, bracketed transport-
+time interpolation (`--max-gap-s`, default 0.1 s); interpolated positions are
+explicit estimates. Duplicate pose stamps, reset/session/clock discontinuities,
+and incompatible domains are rejected. Slip itself is never interpolated.
+Vehicle-position markers are not measured wheel-contact locations. Signed map
+colors are zero centered; ratio colors are sequential, with fixed numeric ranges
+across laps/wheels and no clipping. Progress starts at the first saved raceline
+point, independently of the native lap-counter boundary.
+
+Missing contacts stay unavailable; missing poses retain summaries, missing
+raceline retains localized XY, and missing pixels remove only the background.
+The existing SVG map renderer retains its rotated-background support. Plotly is
+embedded for fully offline viewing.
+The Race Performance viewer retains its exact-match telemetry contract.

@@ -171,4 +171,4 @@ def analyze(data, output, config):
 from .race_view import render_report
 
 
-MODULE = Module('race_performance', '1.0', (), ('pose', 'odom', 'truth', 'lap_count', 'collision_count'), analyze, render_report)
+MODULE = Module('race_performance', '1.0', (), ('pose', 'odom', 'truth', 'lap_count', 'collision_count'), analyze, render_report, report_host='race-performance')

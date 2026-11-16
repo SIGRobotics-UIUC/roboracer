@@ -19,7 +19,7 @@ EXTRA = {'/tf': 'tf2_msgs/msg/TFMessage', '/tf_static': 'tf2_msgs/msg/TFMessage'
 DETAILED = {NS+'left_encoder': 'sensor_msgs/msg/JointState', NS+'right_encoder': 'sensor_msgs/msg/JointState',
             '/map': 'nav_msgs/msg/OccupancyGrid', '/mcl/particles': 'geometry_msgs/msg/PoseArray',
             NS+'lap_time': 'std_msgs/msg/Float32', NS+'best_lap_time': 'std_msgs/msg/Float32',
-            NS+'wheel_slip': 'std_msgs/msg/String'}
+            NS+'wheel_slip': 'std_msgs/msg/String', NS+'wheel_contact': 'std_msgs/msg/String'}
 LATCHED = {'/tf_static', '/raceline/provenance', '/map'}
 
 

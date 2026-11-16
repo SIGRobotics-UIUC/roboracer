@@ -133,13 +133,13 @@ def test_shared_position_navigation_hover_and_escape(tmp_path):
             svg.evaluate('(s,d) => {const r=s.getBoundingClientRect();s.dispatchEvent(new WheelEvent("wheel",{clientX:r.x+r.width/2,clientY:r.y+r.height/2,deltaY:d,cancelable:true}))}', delta)
         assert abs(marker.bounding_box()['width']-before) < .1
         assert svg.locator('path[stroke-dasharray="1 3"]').get_attribute('stroke-width') == '1.8'
-        # Readout fields keep two rows despite longer numbers and missing progress.
+        # Readout fields keep one row despite longer numbers and missing progress.
         height = page.locator('.race-readout').bounding_box()['height']
         page.evaluate('window.benchmarkReport.requestSelection({sampleIndex:2,timestamp:.2,pinned:true})')
         wait_index(2)
         assert abs(page.locator('.race-readout').bounding_box()['height']-height) < 1
         assert page.locator('.race-controls').evaluate('e => new Set([...e.children].map(c=>c.offsetTop)).size') == 2
-        assert page.locator('.race-readout').evaluate('e => new Set([...e.children].map(c=>c.offsetTop)).size') == 2
+        assert page.locator('.race-readout').evaluate('e => new Set([...e.children].map(c=>c.offsetTop)).size') == 1
         # Real pointer movement over the plot selects by progress without native
         # trace-proximity hover being required.
         page.keyboard.press('Escape')

@@ -31,6 +31,8 @@ class Module:
     optional: tuple
     analyze: object
     render_report: object = None
+    report_host: str | None = None
+    report_extensions: object = None
 
 
 REGISTRY = {}
