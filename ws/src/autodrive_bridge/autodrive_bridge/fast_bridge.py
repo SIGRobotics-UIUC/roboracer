@@ -50,6 +50,7 @@ from rosgraph_msgs.msg import Clock
 from autodrive_bridge.single_instance import exit_with_parent
 from autodrive_bridge.frame_trace import FrameTrace, compact_payload
 from autodrive_bridge.steady_time import SteadyEpoch
+from autodrive_bridge.wheel_contact import decode_contact
 
 
 GRAVITY = 9.80665   # m/s^2
@@ -94,6 +95,8 @@ class FastBridge:
         self.publish_camera = p('publish_camera', False).value
         self.publish_wheel_slip = p('publish_wheel_slip', False).value
         self.slip_pub = self.node.create_publisher(String, ns+'/wheel_slip', 10) if self.publish_wheel_slip else None
+        self.publish_wheel_contact = p('publish_wheel_contact', False).value
+        self.contact_pub = self.node.create_publisher(String, ns+'/wheel_contact', 10) if self.publish_wheel_contact else None
         self.steady_epoch = SteadyEpoch() if p('publish_clock', False).value else None
         if self.steady_epoch:
             self.clock_lock = threading.Lock()
@@ -201,6 +204,7 @@ class FastBridge:
 
     def on_frame(self, d):
         t_in = time.perf_counter()
+        contact_arrival_monotonic_ns = time.monotonic_ns() if self.contact_pub else None
         stamp = self.publish_clock() if self.steady_epoch else self.node.get_clock().now().to_msg()
         P = self.pub
         if self.slip_pub and 'V1 Wheel Slip' in d:
@@ -214,6 +218,15 @@ class FastBridge:
                             for i, name in enumerate(('front_left', 'front_right', 'rear_left', 'rear_right'))]))))
             except (ValueError, TypeError, AttributeError) as exc:
                 self.node.get_logger().warning('Invalid wheel slip telemetry: '+str(exc), throttle_duration_sec=5.)
+        if self.contact_pub and 'V1 Wheel Contact' in d:
+            try:
+                contact = decode_contact(d['V1 Wheel Contact'])
+                # Arrival stamp matches this bridge frame; source clock remains separate.
+                contact['stamp_ns'] = stamp.sec*1000000000+stamp.nanosec
+                contact['arrival_monotonic_ns'] = contact_arrival_monotonic_ns
+                self.contact_pub.publish(String(data=json.dumps(contact, allow_nan=False)))
+            except (ValueError, TypeError, RecursionError) as exc:
+                self.node.get_logger().warning('Invalid wheel contact telemetry: '+str(exc), throttle_duration_sec=5.)
         # Restricted only: without ground truth the gate would restart a respawned car at the map origin.
         seen = self.sim_reset(d) if self.publish_restricted_topics else None
         with self.lock:

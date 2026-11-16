@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     git vim \
     ros-humble-ackermann-msgs \
+    ros-humble-rosbag2-py \
+    ros-humble-rosbag2-storage-default-plugins \
+    ros-humble-rosbag2-storage-mcap \
     ros-humble-rqt \
     ros-humble-rviz2 \
     ros-humble-rviz-default-plugins \
@@ -21,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # perception: Cartographer SLAM, robot_localization for the experimental IMU EKF
     ros-humble-cartographer-ros \
     ros-humble-slam-toolbox \
+    python3-plotly \
     ros-humble-robot-localization \
     # gevent from apt: pip can't build it on every platform
     python3-gevent python3-gevent-websocket \

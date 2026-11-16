@@ -2,12 +2,13 @@
 
 ## Architecture
 
-- ROS 2 Humble; four Python `ament_python` autonomy/bridge packages and the native `slam_graph_tools` snapshot exporter under `ws/src/`.
+- ROS 2 Humble; five Python `ament_python` packages and the native `slam_graph_tools` snapshot exporter under `ws/src/`.
 - `autodrive_bridge`: simulator-only Socket.IO `fast_bridge`, sensor/command `adapter`, encoder-based `wheel_odom`, and keyboard teleop. On the car, hardware drivers/VESC replace these interfaces.
 - `perception`: Cartographer mapping and frozen-map localization, `localization_gate`, alternative numpy MCL, map saving, and map-origin recording. `ekf.launch.py` and `corrector` are experimental and outside the race pipeline.
 - Optional mapping backend: `slam_mapping.launch.py` runs async SLAM Toolbox plus `slam_mapping_pose` (native pose relay and online trajectory). `save_slam_map` stages native `.posegraph`/`.data` and uses `slam_graph_tools` to export a consistent final map/trajectory; it does not create a Cartographer pbstream or use simulator ground truth.
 - `planning`: offline centerline/width extraction and TUM minimum-time raceline generation; optional runtime `obstacle_spliner_node` for stationary obstacles absent from the map. TUM runs in a separate venv through subprocess/CSV exchange.
 - `control`: pure pursuit with adaptive lookahead, reactive follow-the-gap, centering wall follower, and experimental disparity-gap follower. `race.launch.py` orchestrates localization, pure pursuit, and optional avoidance.
+- `benchmark`: managed collection with an independent command gate/rosbag2 recorder, plus offline race/timing analysis. Artifacts use `ws/benchmark_runs/runs/` and `ws/benchmark_runs/reports/`; never execute/import `ws/scripts/` from this package. See its README and VALIDATION.md for supported adapters and unvalidated simulator behavior.
 - Read `docs/pipeline.md`, relevant launch/config files, and neighboring tests before editing. Keep changes scoped; preserve working interfaces and validated behavior.
 
 ## Environment and commands
@@ -52,7 +53,8 @@ colcon build --symlink-install --packages-select <package>
 - TF chain: `map -> odom -> base_link -> laser/imu/front_camera`. Exactly one of Cartographer, MCL, or SLAM Toolbox mapping owns `map -> odom`; wheel odometry owns `odom -> base_link`; the sim adapter owns static mounts. `base_link` is the rear axle.
 - Never run both localizers or competing `/drive` publishers. Preserve single-instance guards and bridge frame timestamps; duplicate odometry/IMU stamps can abort Cartographer.
 - Cartographer requires the IMU at the `base_link` origin (mount rotation is allowed). Preserve frame IDs, units, QoS compatibility, and timestamp alignment.
-- Bridge raw topics use `/autodrive/roboracer_1/*`. Current timestamps are arrival-clock based; do not assume deterministic simulation time or existing `/clock` support.
+- Bridge raw topics use `/autodrive/roboracer_1/*`. With `use_sim_time:=true`, the bridge publishes a host-monotonic transport `/clock` that continues during simulator stalls; sensor stamps represent transport arrival, not native simulator acquisition/physics time. Do not assume deterministic simulation time or a Windows/container clock relationship.
+- During benchmark runs, controllers publish `/benchmark/requested_drive`; only `benchmark_gate` publishes `/drive`. Do not bypass the inhibited gate or start another controller/teleop. Raw runs are sealed immediately after finalization; analysis must write outside them.
 
 ## Mapping, planning, and racing
 
@@ -109,7 +111,7 @@ ROS_DOMAIN_ID=42 python3 -m pytest src/control/test/test_lookahead.py src/planni
 
 - `ws/tracks/<name>/` is generated and git-ignored. Preserve validated maps, pbstreams, mapping trajectories, racelines, previews, provenance, and useful logs. Do not delete/overwrite them as cleanup or regenerate them silently.
 - Use new track names, temporary directories, or explicit `TRACKS_DIR`/planner `--tracks-dir` for experiments. Re-planning overwrites generated planning outputs: copy a validated track before experimenting unless replacement is requested.
-- Keep generated `ws/build`, `ws/install`, `ws/log`, and track outputs out of commits. Preserve committed test fixtures; create test outputs in temporary directories.
+- Keep generated `ws/build`, `ws/install`, `ws/log`, `ws/benchmark_runs`, and track outputs out of commits. Preserve committed test fixtures; create test outputs in temporary directories.
 - Preserve CSV formats, map-frame geometry, and driving direction. TUM raceline `psi_rad` uses yaw minus pi/2; do not treat it as ROS yaw. Keep existing working defaults and safety behavior unless the task explicitly changes them.
 
 ## Simulator ground truth: prohibited inputs and review debt
@@ -135,7 +137,7 @@ ROS_DOMAIN_ID=42 python3 -m pytest src/control/test/test_lookahead.py src/planni
 
 - Start with AGENTS.md, the user-named files, and directly relevant neighboring code. Expand scope only when necessary.
 - Prefer targeted `rg` searches and bounded file reads over repository-wide dumps.
-- Exclude generated directories from routine searches: ws/build/, ws/install/, ws/log/, .idea/, __pycache__/, and .pytest_cache/.
+- Exclude generated directories from routine searches: ws/build/, ws/install/, ws/log/, ws/benchmark_runs/, .idea/, __pycache__/, and .pytest_cache/.
 - Treat ws/tracks/ as experiment data. Read only explicitly relevant track artifacts; never modify validated tracks without approval.
 - When debugging a specific run, inspect its named log and report files rather than all historical runs.
 - Do not read large .pbstream, .posegraph, .data, .pgm, or image files as text; use appropriate parsers or metadata inspection when needed.

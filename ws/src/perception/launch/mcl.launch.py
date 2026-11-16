@@ -20,9 +20,11 @@ def generate_launch_description():
         SetParameter(name='use_sim_time', value=ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)),
         DeclareLaunchArgument('track', description='track name, loads tracks/<track>/map.yaml'),
         DeclareLaunchArgument('particles', default_value='1000', description='number of particles'),
+        DeclareLaunchArgument('seed', default_value='-1', description='random seed; -1 keeps nondeterministic default'),
         Node(package='perception', executable='mcl_node', name='mcl', output='screen',
              parameters=[PathJoinSubstitution([FindPackageShare('perception'), 'config', 'mcl.yaml']), {
                  'track': ParameterValue(LaunchConfiguration('track'), value_type=str),
                  'particles': ParameterValue(LaunchConfiguration('particles'), value_type=int),
+                 'seed': ParameterValue(LaunchConfiguration('seed'), value_type=int),
              }]),
     ])
